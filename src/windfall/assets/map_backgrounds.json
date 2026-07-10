@@ -1,0 +1,13 @@
+{
+  "__default__": {
+    "image_path": "D:/Source/Windfall/windfall/assets/map.png",
+    "rect": [
+      -1044386.9730413074,
+      -494917.1653859802,
+      754347.1835619246,
+      989898.9853876012
+    ],
+    "flip_h": false,
+    "flip_v": false
+  }
+}
