@@ -48,6 +48,8 @@ class ActorsPanel(QWidget):
         self._actors: list[ActorInfo] = []
         self._row_addrs: list[int] = []
         self._link: Optional[tuple[float, float, float]] = None
+        self._sort_column: int = 0
+        self._sort_reverse: bool = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(4, 4, 4, 4)
@@ -74,6 +76,7 @@ class ActorsPanel(QWidget):
         self._table.setColumnWidth(0, 110)
         for c in range(1, len(_COLS)):
             self._table.setColumnWidth(c, 62)
+        self._table.horizontalHeader().sectionClicked.connect(self._on_column_clicked)
         root.addWidget(self._table, stretch=1)
 
         btns = QHBoxLayout()
@@ -203,6 +206,7 @@ class ActorsPanel(QWidget):
         self._link = snap.link_pos
         text = self._filter.text().strip().lower()
         actors = [a for a in snap.actors if not text or text in a.name.lower()]
+        self._sort_actors(actors)
         self._actors = actors
 
         addrs = [a.address for a in actors]
@@ -276,6 +280,7 @@ class ActorsPanel(QWidget):
 
     def _rebuild(self, actors: list[ActorInfo]) -> None:
         selected = self._selected_address()
+        self._sort_actors(actors)
         self._table.setRowCount(len(actors))
         for row, a in enumerate(actors):
             items = self._row_items(a)
@@ -283,6 +288,36 @@ class ActorsPanel(QWidget):
                 self._table.setItem(row, col, item)
             if a.address == selected:
                 self._table.selectRow(row)
+
+    def _on_column_clicked(self, col: int) -> None:
+        if col == self._sort_column:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_column = col
+            self._sort_reverse = False
+        self._rebuild(self._actors)
+
+    def _sort_actors(self, actors: list[ActorInfo]) -> None:
+        col = self._sort_column
+        if col == 0:  # Name
+            key = lambda a: a.name
+        elif col == 1:  # Proc
+            key = lambda a: a.proc
+        elif col == 2:  # X
+            key = lambda a: a.pos[0]
+        elif col == 3:  # Y
+            key = lambda a: a.pos[1]
+        elif col == 4:  # Z
+            key = lambda a: a.pos[2]
+        elif col == 5:  # Dist
+            key = lambda a: (
+                math.dist(a.pos, self._link)
+                if self._link is not None
+                else float("inf")
+            )
+        else:
+            return
+        actors.sort(key=key, reverse=self._sort_reverse)
 
     def _update_cells(self, actors: list[ActorInfo]) -> None:
         for row, a in enumerate(actors):

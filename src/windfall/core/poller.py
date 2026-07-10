@@ -130,6 +130,56 @@ class _PositionHammer(threading.Thread):
             time.sleep(self._INTERVAL)
 
 
+class _HoldHammer(threading.Thread):
+    """Dedicated ~500 Hz writer for generic holds that must outpace the frame rate.
+
+    Same rationale as _PositionHammer but for arbitrary WriteFns: the game rewrites
+    some fields (actor status/condition flags, etc.) every frame, so re-applying them
+    at the 30 Hz poller tick loses the race on roughly half the rendered frames,
+    which shows up as flicker. Each registered fn runs every interval while present.
+    """
+
+    _INTERVAL = 0.002
+    _IDLE_WAIT = 0.05
+
+    def __init__(self, hook: DolphinHook) -> None:
+        super().__init__(name="hold-hammer", daemon=True)
+        self._hook = hook
+        self._lock = threading.Lock()
+        self._holds: dict[str, WriteFn] = {}
+        self._wake = threading.Event()
+        self._shutdown = False
+        self.start()
+
+    def set(self, key: str, fn: WriteFn) -> None:
+        with self._lock:
+            self._holds[key] = fn
+        self._wake.set()
+
+    def clear(self, key: str) -> None:
+        with self._lock:
+            self._holds.pop(key, None)
+
+    def shutdown(self) -> None:
+        self._shutdown = True
+        self._wake.set()
+
+    def run(self) -> None:
+        while not self._shutdown:
+            with self._lock:
+                holds = list(self._holds.values())
+            if not holds:
+                self._wake.wait(self._IDLE_WAIT)
+                self._wake.clear()
+                continue
+            for fn in holds:
+                try:
+                    fn(self._hook)
+                except Exception:
+                    pass  # transient (load screen / disconnect); keep trying
+            time.sleep(self._INTERVAL)
+
+
 class _CameraTracker(threading.Thread):
     """~300 Hz camera follower for actor lock-on.
 
@@ -266,6 +316,7 @@ class Poller(QObject):
         self._one_shots: list[WriteFn] = []
         self._holds: dict[str, WriteFn] = {}
         self._hammer = _PositionHammer(lambda: self._player)
+        self._hold_hammer = _HoldHammer(self._hook)
         self._cam_tracker = _CameraTracker(
             lambda: (self._camera, self._version.addr if self._version else None, self._hook),
             on_target_lost=self._on_track_lost,
@@ -283,6 +334,7 @@ class Poller(QObject):
         if self._timer is not None:
             self._timer.stop()
         self._hammer.shutdown()
+        self._hold_hammer.shutdown()
         self._cam_tracker.shutdown()
         self._hook.disconnect()
 
@@ -300,6 +352,16 @@ class Poller(QObject):
     def clear_hold(self, key: str) -> None:
         with QMutexLocker(self._mutex):
             self._holds.pop(key, None)
+
+    def set_fast_hold(self, key: str, fn: WriteFn) -> None:
+        """Re-apply ``fn`` at ~500 Hz on the hold-hammer thread.
+
+        Use instead of set_hold for fields the game rewrites every frame — at the
+        30 Hz tick rate those writes lose the race on some frames and flicker."""
+        self._hold_hammer.set(key, fn)
+
+    def clear_fast_hold(self, key: str) -> None:
+        self._hold_hammer.clear(key)
 
     # ---- teleport hold (the drag-to-map / position edit primitive) ----------
     def set_position_hold(
