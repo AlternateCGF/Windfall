@@ -79,7 +79,7 @@ address tables stay swappable.
 
 ## Address sourcing
 
-Static addresses come from the [CGF95/tww](https://github.com/zeldaret/tww) decompilation symbol maps
+Static addresses come from the [zeldaret/tww](https://github.com/zeldaret/tww) decompilation symbol maps
 (`config/<GAMEID>/symbols.txt`), cross-referenced with the
 [WW-Hacking-Docs RAM map](https://github.com/LagoLunatic/WW-Hacking-Docs), and verified live
 against a running game (the probe/discover tools exist for exactly that). Struct layouts
