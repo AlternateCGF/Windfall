@@ -15,12 +15,23 @@ Japanese GameCube release (`GZLJ01`); USA (`GZLE01`) is also recognized to a deg
   the game's `dBgS` manager) straight out of memory and draws island/terrain outlines.
   Refreshes on stage change and periodically as rooms stream in; rendered via a cached
   raster so it stays smooth.
-- Live actor markers with hover labels; pan / wheel-zoom; auto-follow Link.
+- Live actor markers with hover labels; optional cull-volume bounds overlay;
+  pan / wheel-zoom; auto-follow Link; toggles for grid / islands / actors / collision.
 
 **Camera control** (Camera panel)
 - Live readout of eye / look-at center / FoV / bank.
 - Lock any of them to override the game's camera (the camera update is paused while locked).
 - Smooth eased transitions ("Go") between the current view and target values.
+- **Move Camera pad** — arrow buttons fly the camera relative to where it faces
+  (forward/back, strafe left/right, raise/lower), with an adjustable step size;
+  hold a button to repeat. Moving auto-engages the eye/center locks so the game
+  can't pull the camera back.
+- **Keyboard fly** — the arrow keys (forward/back/strafe) and PageUp/PageDown
+  (up/down) move the camera from anywhere in the app, with smooth ease-in and
+  glide-out, normalized diagonals, and speed tied to the same Step value. Keys are
+  ignored while a spinbox, slider, list, or text field has focus. While locked on
+  an actor the same keys steer the orbit instead: ←/→ yaw around it, ↑/↓ dolly
+  in/out, PgUp/PgDn tilt.
 
 **Actors** (Actors panel)
 - Live actor table (name, process, position, distance to Link), filterable.
@@ -30,7 +41,11 @@ Japanese GameCube release (`GZLJ01`); USA (`GZLE01`) is also recognized to a deg
 - Double-click an island or actor on the map to aim the camera; double-click Link to restore.
 
 **Movie helpers** (Movie panel)
-- HUD hide (USA version) and other movie-making conveniences.
+- HUD hide (USA version).
+- **Camera timeline** — capture camera poses as keyframes, reorder/retime them,
+  scrub or play back with smooth easing (loop optional), and save/load timelines as JSON.
+- **Visibility** — hide Link or any actor via the engine's own NODRAW flags
+  (the actor stays loaded and active, just unrendered).
 
 ## Setup
 

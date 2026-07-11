@@ -390,6 +390,10 @@ class ActorsPanel(QWidget):
         step = self._orbit_dist.singleStep()
         self._orbit_dist.setValue(self._orbit_dist.value() + steps * step)
 
+    def adjust_orbit_distance_units(self, units: int) -> None:
+        """Nudge the orbit distance by raw world units (keyboard dolly)."""
+        self._orbit_dist.setValue(self._orbit_dist.value() + units)
+
     def adjust_orbit_angles(self, yaw_delta: float, pitch_delta: float) -> None:
         """Nudge orbit yaw/pitch by the given deltas (mouse drag)."""
         new_yaw = self._orbit_yaw.value() + yaw_delta

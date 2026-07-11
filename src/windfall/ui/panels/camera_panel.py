@@ -8,12 +8,15 @@ Layout:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import math
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -34,6 +37,23 @@ def _lerp(a: float, b: float, t: float) -> float:
 
 def _smoothstep(t: float) -> float:
     return t * t * (3.0 - 2.0 * t)
+
+
+# Keyboard fly controls: key -> (forward, right, up) direction, scaled by Step.
+_KEY_DIRECTIONS = {
+    Qt.Key.Key_Up: (1.0, 0.0, 0.0),
+    Qt.Key.Key_Down: (-1.0, 0.0, 0.0),
+    Qt.Key.Key_Left: (0.0, -1.0, 0.0),
+    Qt.Key.Key_Right: (0.0, 1.0, 0.0),
+    Qt.Key.Key_PageUp: (0.0, 0.0, 1.0),
+    Qt.Key.Key_PageDown: (0.0, 0.0, -1.0),
+}
+
+_KEY_TICK_MS = 16  # ~60 Hz movement while a key is held (or while gliding to a stop)
+_KEY_TICK_SCALE = 0.1  # fraction of Step applied per tick at full speed (≈6× Step per second)
+_KEY_ACCEL = 0.12  # per-tick blend toward the target velocity (ease-in)
+_KEY_DECEL = 0.18  # per-tick blend toward zero after release (ease-out)
+_KEY_STOP_EPS = 0.02  # velocity magnitude below which the glide stops
 
 
 class CameraPanel(QWidget):
@@ -124,6 +144,48 @@ class CameraPanel(QWidget):
 
         root.addWidget(tgt_box)
 
+        # ---- move controls ----------------------------------------------------
+        move_box = QGroupBox("Move Camera  (arrow keys · PgUp/PgDn = up/down)")
+        move_root = QHBoxLayout(move_box)
+
+        # Arrow pad: forward/back/left/right relative to where the camera faces.
+        pad = QGridLayout()
+        pad.setSpacing(2)
+
+        def _arrow(text: str, tip: str, fwd: float, right: float, up: float) -> QPushButton:
+            b = QPushButton(text)
+            b.setFixedSize(36, 28)
+            b.setToolTip(f"{tip} (hold to repeat)")
+            b.setAutoRepeat(True)
+            b.setAutoRepeatDelay(250)
+            b.setAutoRepeatInterval(50)
+            b.clicked.connect(lambda: self._nudge(fwd, right, up))
+            return b
+
+        pad.addWidget(_arrow("↑", "Move forward", 1, 0, 0), 0, 1)
+        pad.addWidget(_arrow("←", "Move left", 0, -1, 0), 1, 0)
+        pad.addWidget(_arrow("↓", "Move backward", -1, 0, 0), 1, 1)
+        pad.addWidget(_arrow("→", "Move right", 0, 1, 0), 1, 2)
+        move_root.addLayout(pad)
+
+        lift = QGridLayout()
+        lift.setSpacing(2)
+        lift.addWidget(_arrow("▲", "Move up", 0, 0, 1), 0, 0)
+        lift.addWidget(_arrow("▼", "Move down", 0, 0, -1), 1, 0)
+        move_root.addLayout(lift)
+
+        move_root.addSpacing(8)
+        move_root.addWidget(QLabel("Step:"))
+        self._move_step = QDoubleSpinBox()
+        self._move_step.setRange(1.0, 10000.0)
+        self._move_step.setValue(100.0)
+        self._move_step.setDecimals(0)
+        self._move_step.setSingleStep(50.0)
+        self._move_step.setToolTip("World units moved per click.")
+        move_root.addWidget(self._move_step)
+        move_root.addStretch(1)
+        root.addWidget(move_box)
+
         # ---- smooth transition ----------------------------------------------
         trans_box = QGroupBox("Smooth Transition")
         trans_row = QHBoxLayout(trans_box)
@@ -158,6 +220,18 @@ class CameraPanel(QWidget):
         # being held instead of handing the camera back to the game.
         self._lock_center_on_finish = False
         self._lock_eye_on_finish = False
+
+        # Keyboard fly state: keys currently held, the smoothed velocity (in
+        # forward/right/up space), and the tick timer driving movement.
+        self._held_keys: set[int] = set()
+        self._key_vel = [0.0, 0.0, 0.0]
+        self._key_timer = QTimer(self)
+        self._key_timer.setInterval(_KEY_TICK_MS)
+        self._key_timer.timeout.connect(self._on_key_tick)
+        # Optional delegate: handler(fwd, right, up, scale) -> bool. When it
+        # returns True (e.g. camera is orbit-locked on an actor), the tick is
+        # routed there instead of the free-fly nudge.
+        self._orbit_handler = None
 
     # ---- helpers ------------------------------------------------------------
     def _make_spin(self, layout: QHBoxLayout) -> QDoubleSpinBox:
@@ -284,6 +358,113 @@ class CameraPanel(QWidget):
         self._bank_val.setText(str(val))
         if self._bank_lock.isChecked():
             self._poller.set_bank_hold(float(val))
+
+    # ---- keyboard fly -------------------------------------------------------
+    def set_orbit_handler(self, handler) -> None:
+        """Install a delegate for key ticks while the camera is actor-locked."""
+        self._orbit_handler = handler
+
+    def is_camera_key(self, key: int) -> bool:
+        return key in _KEY_DIRECTIONS
+
+    def handle_key(self, key: int, pressed: bool) -> bool:
+        """Track arrow/PageUp/PageDown holds; the tick timer does the moving.
+
+        Returns True when the key belongs to the camera (caller should consume it).
+        """
+        if key not in _KEY_DIRECTIONS:
+            return False
+        if pressed:
+            self._held_keys.add(key)
+            if not self._key_timer.isActive():
+                self._key_timer.start()
+        else:
+            # Keep the timer running: the tick eases the velocity down to a stop.
+            self._held_keys.discard(key)
+        return True
+
+    def release_keys(self) -> None:
+        """Drop all held keys and halt (window lost focus, releases won't arrive)."""
+        self._held_keys.clear()
+        self._key_vel = [0.0, 0.0, 0.0]
+        self._key_timer.stop()
+
+    def _on_key_tick(self) -> None:
+        # Target velocity from the keys held right now (normalized so diagonals
+        # aren't faster than a single axis).
+        tf = tr = tu = 0.0
+        for key in self._held_keys:
+            f, r, u = _KEY_DIRECTIONS[key]
+            tf += f
+            tr += r
+            tu += u
+        mag = math.sqrt(tf * tf + tr * tr + tu * tu)
+        if mag > 1.0:
+            tf, tr, tu = tf / mag, tr / mag, tu / mag
+
+        # Ease the actual velocity toward the target: ramp up on press, glide
+        # out on release.
+        blend = _KEY_ACCEL if self._held_keys else _KEY_DECEL
+        v = self._key_vel
+        v[0] += (tf - v[0]) * blend
+        v[1] += (tr - v[1]) * blend
+        v[2] += (tu - v[2]) * blend
+
+        speed = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+        if not self._held_keys and speed < _KEY_STOP_EPS:
+            self._key_vel = [0.0, 0.0, 0.0]
+            self._key_timer.stop()
+            return
+        if speed > 0.0:
+            if self._orbit_handler is not None and self._orbit_handler(
+                v[0], v[1], v[2], _KEY_TICK_SCALE
+            ):
+                return
+            self._nudge(v[0], v[1], v[2], scale=_KEY_TICK_SCALE)
+
+    # ---- move controls ------------------------------------------------------
+    def _nudge(self, fwd: float, right: float, up: float, scale: float = 1.0) -> None:
+        """Shift eye and center together by one step, relative to camera facing.
+
+        Forward/right stay in the horizontal (XZ) plane so up/down remains a
+        separate axis. Locks eye+center so the game doesn't pull the camera back.
+        """
+        ex, ey, ez = self._eye_x.value(), self._eye_y.value(), self._eye_z.value()
+        cx, cy, cz = self._ctr_x.value(), self._ctr_y.value(), self._ctr_z.value()
+
+        # Facing direction projected onto XZ; fall back to +Z if looking straight down.
+        fx, fz = cx - ex, cz - ez
+        length = math.hypot(fx, fz)
+        if length < 1e-6:
+            fx, fz = 0.0, 1.0
+        else:
+            fx, fz = fx / length, fz / length
+        # Right-hand perpendicular in XZ.
+        rx, rz = -fz, fx
+
+        step = self._move_step.value() * scale
+        dx = (fx * fwd + rx * right) * step
+        dy = up * step
+        dz = (fz * fwd + rz * right) * step
+
+        ex, ey, ez = ex + dx, ey + dy, ez + dz
+        cx, cy, cz = cx + dx, cy + dy, cz + dz
+        self._eye_x.setValue(ex)
+        self._eye_y.setValue(ey)
+        self._eye_z.setValue(ez)
+        self._ctr_x.setValue(cx)
+        self._ctr_y.setValue(cy)
+        self._ctr_z.setValue(cz)
+
+        # Checking a lock sets its hold; if already locked, refresh the hold directly.
+        if self._eye_lock.isChecked():
+            self._poller.set_eye_hold(ex, ey, ez)
+        else:
+            self._eye_lock.setChecked(True)
+        if self._ctr_lock.isChecked():
+            self._poller.set_center_hold(cx, cy, cz)
+        else:
+            self._ctr_lock.setChecked(True)
 
     # ---- smooth transition --------------------------------------------------
     def _on_go(self) -> None:

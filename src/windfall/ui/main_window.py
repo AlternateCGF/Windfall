@@ -3,7 +3,18 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt, QThread
-from PySide6.QtWidgets import QApplication, QDockWidget, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QApplication,
+    QDockWidget,
+    QLineEdit,
+    QMainWindow,
+    QSlider,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..core.poller import Poller, Snapshot
 from .connection_bar import ConnectionBar
@@ -15,6 +26,12 @@ from .panels.movie_panel import MoviePanel
 
 # Height offset for "eye to actor" so the camera sits just above the object, not inside it.
 _EYE_ABOVE = 200.0
+
+# Keyboard orbit rates while locked on an actor, per full-speed key tick
+# (scaled by the camera panel's eased velocity; ~60 ticks/s at 0.1 scale).
+_ORBIT_YAW_RATE = 15.0  # degrees -> ~90°/s at full speed
+_ORBIT_PITCH_RATE = 12.0  # degrees -> ~72°/s
+_ORBIT_DIST_RATE = 170.0  # world units -> ~1000 u/s
 
 
 class MainWindow(QMainWindow):
@@ -83,6 +100,13 @@ class MainWindow(QMainWindow):
             self.tabifyDockWidget(prev, nxt)
         docks[0].raise_()  # show the first tab initially
 
+        # While locked on an actor the poller rewrites eye/center every tick, so
+        # free-fly key nudges would be snapped back; steer the orbit instead.
+        self._camera_panel.set_orbit_handler(self._orbit_key_handler)
+        # Fractional remainders: the orbit sliders/spinbox are integer-backed, so
+        # sub-unit per-tick deltas must accumulate or the eased ramp does nothing.
+        self._orbit_frac = [0.0, 0.0, 0.0]  # yaw, pitch, dist
+
         # Intercept scroll wheel globally: when locked on, redirect to orbit distance.
         QApplication.instance().installEventFilter(self)
 
@@ -108,6 +132,24 @@ class MainWindow(QMainWindow):
     def _on_lock_state_changed(self, locked: bool) -> None:
         """Toggle orbit drag mode on the map when lock state changes."""
         self._map_panel.set_orbit_drag_mode(locked)
+        self._orbit_frac = [0.0, 0.0, 0.0]
+
+    def _orbit_key_handler(self, fwd: float, right: float, up: float, scale: float) -> bool:
+        """Keyboard fly while actor-locked: ←/→ orbit yaw, PgUp/PgDn pitch, ↑/↓ dolly."""
+        if not self._actors_panel.is_locked:
+            return False
+        frac = self._orbit_frac
+        frac[0] += right * _ORBIT_YAW_RATE * scale
+        frac[1] += up * _ORBIT_PITCH_RATE * scale
+        frac[2] += -fwd * _ORBIT_DIST_RATE * scale  # forward = closer
+        yaw, frac[0] = int(frac[0]), frac[0] - int(frac[0])
+        pitch, frac[1] = int(frac[1]), frac[1] - int(frac[1])
+        dist, frac[2] = int(frac[2]), frac[2] - int(frac[2])
+        if yaw or pitch:
+            self._actors_panel.adjust_orbit_angles(yaw, pitch)
+        if dist:
+            self._actors_panel.adjust_orbit_distance_units(dist)
+        return True
 
     def _on_snapshot(self, snap: Snapshot) -> None:
         self._bar.update_from(snap)
@@ -132,4 +174,18 @@ class MainWindow(QMainWindow):
             if delta != 0:
                 self._actors_panel.adjust_orbit_distance(1 if delta > 0 else -1)
             return True
+        # Arrow / PageUp / PageDown keys fly the camera, unless an input widget
+        # that needs them (spinbox, slider, list, text field) has focus.
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            focus = QApplication.focusWidget()
+            if not isinstance(focus, (QAbstractSpinBox, QSlider, QAbstractItemView, QLineEdit)):
+                if event.isAutoRepeat():
+                    # The hold timer does the moving; just swallow repeats of our keys.
+                    return self._camera_panel.is_camera_key(event.key())
+                pressed = event.type() == QEvent.Type.KeyPress
+                if self._camera_panel.handle_key(event.key(), pressed):
+                    return True
+        elif event.type() == QEvent.Type.WindowDeactivate and obj is self:
+            # Key releases won't reach us anymore — stop any keyboard fly.
+            self._camera_panel.release_keys()
         return super().eventFilter(obj, event)
