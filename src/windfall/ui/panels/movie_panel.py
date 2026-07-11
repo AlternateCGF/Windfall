@@ -102,13 +102,16 @@ class MoviePanel(QWidget):
         del_btn = QPushButton("Del")
         del_btn.setToolTip("Delete the selected keyframe.")
         del_btn.clicked.connect(self._on_tl_del)
+        dup_btn = QPushButton("Duplicate")
+        dup_btn.setToolTip("Duplicate the selected keyframe.")
+        dup_btn.clicked.connect(self._on_tl_dup)
         up_btn = QPushButton("↑")
         dn_btn = QPushButton("↓")
         for b, d in ((up_btn, -1), (dn_btn, 1)):
             b.setFixedWidth(26)
             b.setToolTip("Reorder the selected keyframe.")
             b.clicked.connect(lambda _c, dd=d: self._on_tl_move(dd))
-        for b in (add_btn, set_btn, del_btn, up_btn, dn_btn):
+        for b in (add_btn, set_btn, del_btn, dup_btn, up_btn, dn_btn):
             key_row.addWidget(b)
         key_row.addStretch(1)
         key_row.addWidget(QLabel("Travel:"))
@@ -244,6 +247,21 @@ class MoviePanel(QWidget):
             return
         del self._tl_keys[row]
         self._tl_refresh_list(select=min(row, len(self._tl_keys) - 1))
+
+    def _on_tl_dup(self) -> None:
+        row = self._tl_list.currentRow()
+        if not (0 <= row < len(self._tl_keys)):
+            return
+        src = self._tl_keys[row]
+        dup = _Keyframe(
+            eye=src.eye,
+            center=src.center,
+            fovy=src.fovy,
+            bank=src.bank,
+            dur=src.dur,
+        )
+        self._tl_keys.insert(row + 1, dup)
+        self._tl_refresh_list(select=row + 1)
 
     def _on_tl_move(self, delta: int) -> None:
         row = self._tl_list.currentRow()
