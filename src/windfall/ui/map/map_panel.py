@@ -66,6 +66,11 @@ class MapPanel(QWidget):
         self._collision.setToolTip("Show/hide the loaded collision geometry (island/terrain outlines).")
         self._collision.toggled.connect(self._view.set_collision_visible)
 
+        self._bounds = QCheckBox("Bounds")
+        self._bounds.setChecked(False)
+        self._bounds.setToolTip("Show/hide actor cull-volume bounding boxes and spheres on the map.")
+        self._bounds.toggled.connect(self._view.set_bounds_visible)
+
         self._last_link: Optional[tuple[float, float]] = None
         self._link_lbl = QLabel("Link: —")
         self._cursor_lbl = QLabel("Cursor: —")
@@ -81,6 +86,7 @@ class MapPanel(QWidget):
         bar.addWidget(self._islands)
         bar.addWidget(self._actors)
         bar.addWidget(self._collision)
+        bar.addWidget(self._bounds)
         bar.addStretch(1)
         bar.addWidget(self._link_lbl)
         bar.addWidget(QLabel("  "))

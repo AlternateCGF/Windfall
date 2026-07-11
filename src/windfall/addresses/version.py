@@ -77,6 +77,11 @@ class Addresses:
     actor_node_off: Optional[int] = None  # offset of the {next, prev} queue node inside each actor
     actor_pos_off: Optional[int] = None  # fopAc_ac_c current.pos (same field as player_pos_off)
     actor_angle_off: Optional[int] = None  # fopAc_ac_c current.angle.y (s16 facing angle)
+    # Cull volume (the actor's bounding box/sphere used for draw culling). Offsets from the
+    # decomp f_op_actor.h, in the same struct region as the verified current.pos/angle fields.
+    actor_cull_type_off: Optional[int] = None  # fopAc_ac_c cullType (u8, fopAc_Cull_e)
+    actor_cull_mtx_off: Optional[int] = None  # fopAc_ac_c cullMtx (MtxP -> 3x4 f32)
+    actor_cull_data_off: Optional[int] = None  # fopAc_ac_c cull union (custom box min/max | sphere)
     objectname_table: Optional[int] = None  # l_objectName: {char[8] name, u16 procName, u8, u8}
     objectname_count: Optional[int] = None
 
@@ -125,6 +130,9 @@ _JP = Addresses(
     actor_node_off=0x0C4,  # node = {next @ +0, prev @ +4} embedded in fopAc_ac_c
     actor_pos_off=0x1F8,  # current.pos — matches player_pos_off
     actor_angle_off=0x206,  # current.angle.y — verified live against the debug angle mirror
+    actor_cull_type_off=0x1BF,
+    actor_cull_mtx_off=0x22C,
+    actor_cull_data_off=0x230,
     # l_objectName table: located live by finding the "Link" entry with procName 0x00A9,
     # then stepping 12-byte entries to the table bounds.
     objectname_table=0x80365CB8,

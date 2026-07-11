@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
 
 from ...core.poller import Poller, Snapshot
@@ -78,6 +78,7 @@ class MapView(QGraphicsView):
         self._show_islands = True
         self._show_actors = True
         self._show_collision = True
+        self._show_bounds = False
         self._collision_path: Optional[QPainterPath] = None
         self._collision_sig: Optional[tuple] = None
         # Cached raster of the collision layer: re-rendered only on zoom change,
@@ -157,6 +158,10 @@ class MapView(QGraphicsView):
         self._show_collision = visible
         self.viewport().update()
 
+    def set_bounds_visible(self, visible: bool) -> None:
+        self._show_bounds = visible
+        self.viewport().update()
+
     def _rebuild_collision_path(self, meshes: list) -> None:
         """Flatten the collision meshes into one scene-space QPainterPath (world XZ)."""
         # Cheap change detection: same meshes + triangle counts -> keep the cached path.
@@ -171,10 +176,8 @@ class MapView(QGraphicsView):
         path.setFillRule(Qt.FillRule.WindingFill)
         for mesh in meshes:
             for x0, z0, x1, z1, x2, z2 in mesh.tris:
-                path.moveTo(x0, z0)
-                path.lineTo(x1, z1)
-                path.lineTo(x2, z2)
-                path.closeSubpath()
+                poly = QPolygonF([QPointF(x0, z0), QPointF(x1, z1), QPointF(x2, z2)])
+                path.addPolygon(poly)
         self._collision_path = path
         self._collision_pixmap = None  # force re-render of the cached layer
         self.viewport().update()
@@ -446,9 +449,32 @@ class MapView(QGraphicsView):
         for sx, sy, _a in on_screen:
             painter.drawEllipse(QPointF(sx, sy), dot_r, dot_r)
 
+        # Bounding volume outlines (cull volumes projected to world XZ).
+        hover_addr = self._hover_actor.address if self._hover_actor else None
+        if self._show_bounds:
+            bounds_pen = QPen(QColor(100, 200, 255, 160), 1.5)
+            bounds_hover_pen = QPen(QColor(255, 100, 100, 220), 2.0)
+            for sx, sy, a in on_screen:
+                is_hovered = a.address == hover_addr
+                if a.bounds_rect is not None:
+                    x_min, z_min, x_max, z_max = a.bounds_rect
+                    tl = self.mapFromScene(QPointF(x_min, z_min))
+                    br = self.mapFromScene(QPointF(x_max, z_max))
+                    r = QRectF(tl, br).normalized()
+                    painter.setPen(bounds_hover_pen if is_hovered else bounds_pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawRect(r)
+                elif a.bounds_circle is not None:
+                    cx, cz, radius = a.bounds_circle
+                    c = self.mapFromScene(QPointF(cx, cz))
+                    e = self.mapFromScene(QPointF(cx + radius, cz))
+                    scr_r = math.hypot(float(e.x()) - float(c.x()), float(e.y()) - float(c.y()))
+                    painter.setPen(bounds_hover_pen if is_hovered else bounds_pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(QPointF(c), scr_r, scr_r)
+
         # Labels: everything when the view is uncluttered, otherwise just the hovered one.
         label_all = len(on_screen) <= 25
-        hover_addr = self._hover_actor.address if self._hover_actor else None
         font = QFont("Segoe UI", 8)
         painter.setFont(font)
         fm = painter.fontMetrics()
