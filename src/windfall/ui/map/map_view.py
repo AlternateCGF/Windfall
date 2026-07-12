@@ -25,7 +25,26 @@ from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QMenu
 
 from ...core.poller import Poller, Snapshot
 from ...game.actors import ActorInfo, is_ambient
-from ...game.collision import ground_height_below
+from ...game.collision import (
+    ATTR_CARPET,
+    ATTR_DAMAGE,
+    ATTR_DIRT,
+    ATTR_ELECTRICITY,
+    ATTR_FREEZE,
+    ATTR_GIANT_FLOWER,
+    ATTR_GRASS,
+    ATTR_ICE,
+    ATTR_LAVA,
+    ATTR_METAL,
+    ATTR_NORMAL,
+    ATTR_SAND,
+    ATTR_STONE,
+    ATTR_VOID,
+    ATTR_WATER,
+    ATTR_WATERFALL,
+    ATTR_WOOD,
+    ground_height_below,
+)
 from .islands import ISLANDS, SECTOR_SIZE, Island
 
 # World Y is up; the top-down map uses world X (horizontal) and world Z (vertical).
@@ -52,6 +71,32 @@ _TELEPORT_GROUND_CLEARANCE = 5.0
 # while the destination streamed in; placing him safely high guarantees he's above
 # whatever loads below, at the cost of a visible fall on arrival.
 _TELEPORT_SAFE_ALTITUDE = 3000.0
+
+# Collision overlay color by terrain type (dBgS_AttributeCode). NORMAL and STONE cover
+# huge, uninteresting areas (the generic default floor and large rock/dock floors) —
+# left fully transparent so only more distinctive terrain (an island's grass/sand/wood,
+# or actual water) gets colored, instead of a flat wash over the map.
+_COLLISION_FLAT_COLOR = QColor(60, 140, 115, 60)
+_COLLISION_FLAT_OUTLINE = QColor(70, 130, 110, 90)
+_TERRAIN_COLORS: dict[int, QColor] = {
+    ATTR_NORMAL: QColor(100, 150, 130, 0),
+    ATTR_DIRT: QColor(150, 100, 55, 110),
+    ATTR_WOOD: QColor(190, 135, 75, 190),
+    ATTR_STONE: QColor(150, 150, 160, 0),
+    ATTR_GRASS: QColor(70, 180, 60, 110),
+    ATTR_GIANT_FLOWER: QColor(230, 130, 190, 190),
+    ATTR_LAVA: QColor(240, 90, 25, 190),
+    ATTR_VOID: QColor(30, 30, 35, 190),
+    ATTR_DAMAGE: QColor(220, 40, 40, 190),
+    ATTR_CARPET: QColor(165, 90, 200, 190),
+    ATTR_SAND: QColor(235, 205, 120, 110),
+    ATTR_ICE: QColor(160, 225, 240, 190),
+    ATTR_WATER: QColor(60, 140, 235, 100),
+    ATTR_METAL: QColor(190, 195, 205, 190),
+    ATTR_FREEZE: QColor(110, 235, 235, 190),
+    ATTR_ELECTRICITY: QColor(240, 220, 40, 190),
+    ATTR_WATERFALL: QColor(70, 160, 240, 190),
+}
 
 # Movement blip: expanding rings that spawn when Link moves.
 _BLIP_EXPAND_SPEED = 400.0   # world units per second (radius growth)
@@ -111,6 +156,7 @@ class MapView(QGraphicsView):
         self._show_islands = True
         self._show_actors = True
         self._show_collision = True
+        self._collision_by_terrain = False
         self._show_bounds = False
         self._collision_path: Optional[QPainterPath] = None
         self._collision_sig: Optional[tuple] = None
@@ -261,6 +307,13 @@ class MapView(QGraphicsView):
         self._show_collision = visible
         self.viewport().update()
 
+    def set_collision_by_terrain(self, on: bool) -> None:
+        """Toggle coloring the collision overlay by terrain type (grass/sand/stone/
+        water/...) instead of a flat fill."""
+        self._collision_by_terrain = on
+        self._collision_pixmap = None  # force re-render with the new style
+        self.viewport().update()
+
     def set_bounds_visible(self, visible: bool) -> None:
         self._show_bounds = visible
         self.viewport().update()
@@ -334,9 +387,29 @@ class MapView(QGraphicsView):
         p = QPainter(pm)
         p.scale(scale, scale)
         p.translate(-region.left(), -region.top())
-        p.setPen(QPen(QColor(70, 130, 110, 90), 0))
-        p.setBrush(QColor(60, 140, 115, 60))
-        p.drawPath(self._collision_path)
+        if self._collision_by_terrain:
+            # Antialiasing off + no pen leaves visible seams between adjacent triangles
+            # (each rasterized independently) — looks like noisy confetti instead of a
+            # clean overlay. A matching-color pen covers those seams; a small pen width
+            # (in scene units, so it stays a consistent ~1px on screen) blends them.
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            for mesh in self._collision_meshes:
+                for (x0, z0, x1, z1, x2, z2), attr in zip(mesh.tris, mesh.tris_attr):
+                    if (
+                        max(x0, x1, x2) < region.left() or min(x0, x1, x2) > region.right()
+                        or max(z0, z1, z2) < region.top() or min(z0, z1, z2) > region.bottom()
+                    ):
+                        continue
+                    color = _TERRAIN_COLORS.get(attr, _COLLISION_FLAT_COLOR)
+                    if color.alpha() == 0:
+                        continue  # e.g. NORMAL/WATER — not worth drawing at all
+                    p.setPen(QPen(color, 0))  # cosmetic (always ~1px) pen covers triangle seams
+                    p.setBrush(color)
+                    p.drawPolygon(QPolygonF([QPointF(x0, z0), QPointF(x1, z1), QPointF(x2, z2)]))
+        else:
+            p.setPen(QPen(_COLLISION_FLAT_OUTLINE, 0))
+            p.setBrush(_COLLISION_FLAT_COLOR)
+            p.drawPath(self._collision_path)
         p.end()
         self._collision_pixmap = pm
         self._collision_pixmap_scene_rect = region

@@ -516,10 +516,17 @@ class Poller(QObject):
     _COLLISION_REFRESH_TICKS = 300
     _COLLISION_CACHE_PATH = Path.cwd() / "windfall_cache" / "collision_cache.json"
 
+    # Bump whenever CollisionMesh's schema gains a field (tris_y, tris_attr, ...) so a
+    # cache written by an older version gets discarded and rebuilt from live reads,
+    # instead of being loaded as "valid" with the new field silently empty forever —
+    # the stage-merge in _read_collision never replaces an already-seen bgw_addr, so a
+    # stale entry sticks around indefinitely otherwise.
+    _COLLISION_CACHE_VERSION = 2
+
     def _save_collision_cache(self) -> None:
         """Persist the collision cache to disk."""
         data = {
-            "version": 1,
+            "version": self._COLLISION_CACHE_VERSION,
             "stages": {
                 name: [m.to_dict() for m in meshes]
                 for name, meshes in self._collision_cache.items()
@@ -537,7 +544,7 @@ class Poller(QObject):
             if not self._COLLISION_CACHE_PATH.exists():
                 return
             data = json.loads(self._COLLISION_CACHE_PATH.read_text(encoding="utf-8"))
-            if data.get("version") != 1:
+            if data.get("version") != self._COLLISION_CACHE_VERSION:
                 return
             self._collision_cache = {
                 name: [CollisionMesh.from_dict(m) for m in meshes]

@@ -14,6 +14,8 @@ markers, live actors, and a collision overlay read straight out of memory.
   falling under the map.
 - Double-click an actor (here or in the Actors panel) to lock on and eye-follow it;
   double-click Link to release and restore the camera.
+- "By Terrain" toggle on the collision overlay: color each triangle by its actual
+  in-game terrain type (grass/sand/stone/water/lava/...) instead of a flat fill.
 
 **Camera control** — live eye/center/FoV/bank readout, lockable to override the game's own
 camera. Smooth eased transitions between views, an arrow-button fly pad, and keyboard flying

@@ -62,6 +62,14 @@ class MapPanel(QWidget):
         self._collision.setToolTip("Show/hide the loaded collision geometry (island/terrain outlines).")
         self._collision.toggled.connect(self._view.set_collision_visible)
 
+        self._terrain = QCheckBox("By Terrain")
+        self._terrain.setChecked(False)
+        self._terrain.setToolTip(
+            "Color the collision overlay by terrain type (grass/sand/stone/water/...)"
+            " instead of a flat fill."
+        )
+        self._terrain.toggled.connect(self._view.set_collision_by_terrain)
+
         self._bounds = QCheckBox("Bounds")
         self._bounds.setChecked(False)
         self._bounds.setToolTip("Show/hide actor cull-volume bounding boxes and spheres on the map.")
@@ -81,6 +89,7 @@ class MapPanel(QWidget):
         bar.addWidget(self._islands)
         bar.addWidget(self._actors)
         bar.addWidget(self._collision)
+        bar.addWidget(self._terrain)
         bar.addWidget(self._bounds)
         bar.addStretch(1)
         bar.addWidget(self._link_lbl)
