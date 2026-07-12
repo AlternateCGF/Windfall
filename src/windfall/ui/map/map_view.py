@@ -8,18 +8,20 @@ Interactions:
   * left-drag Link     : teleport — pins X/Z each tick via the poller hold (Y captured at grab so he
                          slides at constant height); on release the hold clears unless "freeze" is on.
   * left-drag empty    : pan
-  * right-drag         : pan
+  * right-drag         : pan; while locked on an actor, orbits the camera (yaw/pitch)
+  * right-click (no drag): context menu with "Teleport Link Here" at that world point
 """
 
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QMenu
 
 from ...core.poller import Poller, Snapshot
 from ...game.actors import ActorInfo, is_ambient
@@ -28,6 +30,25 @@ from .islands import ISLANDS, SECTOR_SIZE, Island
 # World Y is up; the top-down map uses world X (horizontal) and world Z (vertical).
 _LINK_RADIUS_PX = 7.0  # dot fallback radius in *screen* pixels (constant regardless of zoom)
 _FACE_DIAMETER_PX = 30.0  # rendered size of the face marker in screen pixels
+
+# Snapshot interpolation: the poller samples on its own clock, which drifts against the
+# game's frame rate, so raw positions stutter. Markers are drawn at ~60 Hz, blended
+# between the last two polls (one poll interval of latency).
+_INTERP_REPAINT_MS = 16
+_INTERP_SNAP_DIST = 2000.0  # world units; larger jumps (teleports, respawns) snap instead
+_LINK_KEY = -1  # motion-dict key for Link (actor keys are addresses, always positive)
+
+# Right-click is a context-menu click if the cursor stays within this many screen
+# pixels of where the button went down; beyond that it's a pan drag.
+_RIGHT_CLICK_DRAG_THRESHOLD = 6.0
+
+# Movement blip: expanding rings that spawn when Link moves.
+_BLIP_EXPAND_SPEED = 400.0   # world units per second (radius growth)
+_BLIP_LIFETIME = 1.0         # seconds before fully faded
+_BLIP_MAX_RADIUS = 35.0      # world units (radius cap)
+_BLIP_MIN_SPAWN_DIST = 20.0  # world units (minimum movement to trigger a blip)
+_BLIP_COLOR = QColor(80, 200, 120)
+_BLIP_LINE_WIDTH = 1.5       # screen pixels
 
 _ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
 _FACE_FILES = ("link_face.png", "link.png", "link_face.jpg")
@@ -90,11 +111,16 @@ class MapView(QGraphicsView):
         self._link_actor: Optional[ActorInfo] = None
         self._hover_actor: Optional[ActorInfo] = None
 
+        # Movement blip state.
+        self._link_blips: list[tuple[float, float, float]] = []  # (x, z, spawn_time)
+        self._link_blip_prev: Optional[tuple[float, float]] = None  # last blip spawn position
+
         self._dragging_link = False
         self._panning = False
         self._pan_last: Optional[QPointF] = None
         self._right_panning = False
         self._right_panning_last = None
+        self._right_press_pos: Optional[QPointF] = None
         self.freeze = False
 
         # Orbit drag: when enabled, left-drag rotates the camera orbit (yaw/pitch).
@@ -104,6 +130,15 @@ class MapView(QGraphicsView):
 
         # Track whether auto_follow was on before a drag started, so we can restore it.
         self._follow_before_drag = False
+
+        # Motion history for interpolation: key -> (prev_x, prev_z, cur_x, cur_z,
+        # cur_sample_time, sample_dt). Keys are actor addresses, or _LINK_KEY for Link.
+        self._motion: dict[int, tuple[float, float, float, float, float, float]] = {}
+        self._last_snap_time: Optional[float] = None
+        self._repaint_timer = QTimer(self)
+        self._repaint_timer.setInterval(_INTERP_REPAINT_MS)
+        self._repaint_timer.timeout.connect(self._on_repaint_tick)
+        self._repaint_timer.start()
 
     @property
     def auto_follow(self) -> bool:
@@ -128,11 +163,65 @@ class MapView(QGraphicsView):
         if snap.link_angle_deg is not None:
             self._link_angle_deg = snap.link_angle_deg
         self.link_moved.emit(x, z)
-        if self._auto_follow or not self._have_centered:
+
+        # Spawn movement blips when Link's position changes.
+        now = time.perf_counter()
+        if self._link_blip_prev is not None:
+            bpx, bpz = self._link_blip_prev
+            if math.hypot(x - bpx, z - bpz) >= _BLIP_MIN_SPAWN_DIST:
+                self._link_blips.append((x, z, now))
+                self._link_blip_prev = (x, z)
+        else:
+            self._link_blip_prev = (x, z)
+        # Prune expired blips.
+        self._link_blips = [(bx, bz, t) for bx, bz, t in self._link_blips if now - t < _BLIP_LIFETIME]
+
+        # Record motion history for interpolated drawing.
+        now = time.perf_counter()
+        dt = 1 / 30 if self._last_snap_time is None else min(0.25, max(0.01, now - self._last_snap_time))
+        self._last_snap_time = now
+        old = self._motion
+        motion: dict[int, tuple[float, float, float, float, float, float]] = {}
+
+        def track(key: int, wx: float, wz: float) -> None:
+            prev = old.get(key)
+            if prev is not None:
+                px, pz = prev[2], prev[3]
+                if abs(wx - px) + abs(wz - pz) <= _INTERP_SNAP_DIST:
+                    motion[key] = (px, pz, wx, wz, now, dt)
+                    return
+            motion[key] = (wx, wz, wx, wz, now, dt)
+
+        track(_LINK_KEY, x, z)
+        for a in self._actors:
+            track(a.address, a.pos[0], a.pos[2])
+        self._motion = motion
+
+        if not self._have_centered:
             self.centerOn(self._link_world)
             self._have_centered = True
-        if not self._dragging_link:
-            self.viewport().update()
+
+    def _display_pos(self, key: int, wx: float, wz: float) -> tuple[float, float]:
+        """Where to draw the marker right now: lerped between the last two polls."""
+        m = self._motion.get(key)
+        if m is None:
+            return wx, wz
+        px, pz, cx, cz, t_cur, dt = m
+        u = (time.perf_counter() - t_cur) / dt
+        if u >= 1.0:
+            return cx, cz
+        if u <= 0.0:
+            return px, pz
+        return px + (cx - px) * u, pz + (cz - pz) * u
+
+    def _on_repaint_tick(self) -> None:
+        """~60 Hz: repaint with interpolated positions; keep auto-follow smooth too."""
+        if self._link_world is None:
+            return
+        if self._auto_follow and not self._dragging_link:
+            lx, lz = self._display_pos(_LINK_KEY, self._link_world.x(), self._link_world.y())
+            self.centerOn(QPointF(lx, lz))
+        self.viewport().update()
 
     def recenter(self) -> None:
         if self._link_world is not None:
@@ -151,7 +240,7 @@ class MapView(QGraphicsView):
         self.viewport().update()
 
     def set_orbit_drag_mode(self, enabled: bool) -> None:
-        """Enable/disable orbit drag: left-drag rotates camera yaw/pitch when locked on."""
+        """Enable/disable orbit drag: right-drag rotates camera yaw/pitch when locked on."""
         self._orbit_drag_mode = enabled
 
     def set_collision_visible(self, visible: bool) -> None:
@@ -283,7 +372,13 @@ class MapView(QGraphicsView):
         painter.resetTransform()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        center = self.mapFromScene(self._link_world)
+        # Draw movement blips (expanding green rings) behind Link.
+        self._draw_link_blips(painter)
+        if self._dragging_link:  # pinned to the cursor — no interpolation lag
+            lx, lz = self._link_world.x(), self._link_world.y()
+        else:
+            lx, lz = self._display_pos(_LINK_KEY, self._link_world.x(), self._link_world.y())
+        center = self.mapFromScene(QPointF(lx, lz))
         cx, cy = float(center.x()), float(center.y())
 
         if self._face is not None:
@@ -314,6 +409,29 @@ class MapView(QGraphicsView):
             painter.setPen(QPen(fill, 2.0))
             painter.drawLine(center, QPointF(cx + dx, cy + dy))
         painter.restore()
+
+    def _draw_link_blips(self, painter: QPainter) -> None:
+        """Expanding green rings at Link's recent positions (called in device-pixel space)."""
+        if not self._link_blips:
+            return
+        now = time.perf_counter()
+        for bx, bz, t0 in self._link_blips:
+            age = now - t0
+            if age >= _BLIP_LIFETIME:
+                continue
+            u = age / _BLIP_LIFETIME  # 0..1
+            radius = min(age * _BLIP_EXPAND_SPEED, _BLIP_MAX_RADIUS)
+            alpha = max(0, int(255 * (1.0 - u)))
+            screen_pt = self.mapFromScene(QPointF(bx, bz))
+            edge_pt = self.mapFromScene(QPointF(bx + radius, bz))
+            scr_radius = abs(float(edge_pt.x()) - float(screen_pt.x()))
+            if scr_radius < 1.0:
+                continue
+            color = QColor(_BLIP_COLOR)
+            color.setAlpha(alpha)
+            painter.setPen(QPen(color, _BLIP_LINE_WIDTH))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(screen_pt, scr_radius, scr_radius)
 
     def _draw_grid_labels(self, painter: QPainter, view_rect: QRectF) -> None:
         """Draw the sea-chart grid lines and column/row labels (A-G, 1-7)."""
@@ -437,8 +555,11 @@ class MapView(QGraphicsView):
         edge = QPen(QColor(50, 35, 15), 1)
 
         on_screen: list[tuple[float, float, ActorInfo]] = []
+        offsets: dict[int, tuple[float, float]] = {}  # world-space interp offset per actor
         for a in self._actors:
-            screen = self.mapFromScene(QPointF(a.pos[0], a.pos[2]))
+            wx, wz = self._display_pos(a.address, a.pos[0], a.pos[2])
+            offsets[a.address] = (wx - a.pos[0], wz - a.pos[2])
+            screen = self.mapFromScene(QPointF(wx, wz))
             sx, sy = float(screen.x()), float(screen.y())
             if sx < -20 or sx > vw + 20 or sy < -20 or sy > vh + 20:
                 continue
@@ -456,16 +577,18 @@ class MapView(QGraphicsView):
             bounds_hover_pen = QPen(QColor(255, 100, 100, 220), 2.0)
             for sx, sy, a in on_screen:
                 is_hovered = a.address == hover_addr
+                ox, oz = offsets.get(a.address, (0.0, 0.0))
                 if a.bounds_rect is not None:
                     x_min, z_min, x_max, z_max = a.bounds_rect
-                    tl = self.mapFromScene(QPointF(x_min, z_min))
-                    br = self.mapFromScene(QPointF(x_max, z_max))
+                    tl = self.mapFromScene(QPointF(x_min + ox, z_min + oz))
+                    br = self.mapFromScene(QPointF(x_max + ox, z_max + oz))
                     r = QRectF(tl, br).normalized()
                     painter.setPen(bounds_hover_pen if is_hovered else bounds_pen)
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawRect(r)
                 elif a.bounds_circle is not None:
                     cx, cz, radius = a.bounds_circle
+                    cx, cz = cx + ox, cz + oz
                     c = self.mapFromScene(QPointF(cx, cz))
                     e = self.mapFromScene(QPointF(cx + radius, cz))
                     scr_r = math.hypot(float(e.x()) - float(c.x()), float(e.y()) - float(c.y()))
@@ -555,18 +678,18 @@ class MapView(QGraphicsView):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.RightButton:
+            if self._orbit_drag_mode:
+                self._orbit_dragging = True
+                self._orbit_drag_last = event.position()
+                self.setCursor(Qt.CursorShape.CrossCursor)
+                return
             self._right_panning = True
             self._right_pan_last = event.position()
+            self._right_press_pos = event.position()
             if self._auto_follow:
                 self._auto_follow = False
                 self.auto_follow_changed.emit(False)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
-            return
-
-        if event.button() == Qt.MouseButton.LeftButton and self._orbit_drag_mode:
-            self._orbit_dragging = True
-            self._orbit_drag_last = event.position()
-            self.setCursor(Qt.CursorShape.CrossCursor)
             return
 
         if event.button() == Qt.MouseButton.LeftButton and self._near_link(
@@ -640,15 +763,22 @@ class MapView(QGraphicsView):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.RightButton and self._orbit_dragging:
+            self._orbit_dragging = False
+            self._orbit_drag_last = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            return
         if event.button() == Qt.MouseButton.RightButton and self._right_panning:
             self._right_panning = False
             self._right_pan_last = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
-            return
-        if event.button() == Qt.MouseButton.LeftButton and self._orbit_dragging:
-            self._orbit_dragging = False
-            self._orbit_drag_last = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
+            press_pos = self._right_press_pos
+            self._right_press_pos = None
+            if (
+                press_pos is not None
+                and (event.position() - press_pos).manhattanLength() < _RIGHT_CLICK_DRAG_THRESHOLD
+            ):
+                self._show_teleport_menu(event.position())
             return
         if self._dragging_link:
             self._dragging_link = False
@@ -664,6 +794,16 @@ class MapView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     # ---- teleport helpers ---------------------------------------------------
+    def _show_teleport_menu(self, view_pos: QPointF) -> None:
+        world = self.mapToScene(view_pos.toPoint())
+        menu = QMenu(self)
+        action = menu.addAction("Teleport Link Here")
+        chosen = menu.exec(self.mapToGlobal(view_pos.toPoint()))
+        if chosen is action:
+            # Y left following the live value so Link falls/settles to the ground,
+            # same as dragging him on the map.
+            self._poller.teleport_link_once(world.x(), None, world.y())
+
     def _apply_teleport(self, world: QPointF) -> None:
         # Pin X/Z to the cursor; keep Y following the live value (None) so Link settles to ground.
         self._poller.set_position_hold(x=world.x(), z=world.y(), y=None)

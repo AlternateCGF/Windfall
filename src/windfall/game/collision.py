@@ -39,6 +39,16 @@ class CollisionMesh:
     # Flat triangle list: (x0, z0, x1, z1, x2, z2) per triangle.
     tris: list[tuple[float, float, float, float, float, float]] = field(default_factory=list)
 
+    def to_dict(self) -> dict:
+        return {"bgw_addr": self.bgw_addr, "tris": [list(t) for t in self.tris]}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> CollisionMesh:
+        return cls(
+            bgw_addr=d["bgw_addr"],
+            tris=[tuple(t) for t in d.get("tris", [])],
+        )
+
 
 class CollisionReader:
     def __init__(self, hook: DolphinHook, addr: Addresses) -> None:

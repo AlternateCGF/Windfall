@@ -24,3 +24,6 @@ dist/
 # OS cruft
 Thumbs.db
 .DS_Store
+
+# Application data
+windfall_cache/

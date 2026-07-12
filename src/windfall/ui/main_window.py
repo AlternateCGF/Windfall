@@ -22,6 +22,7 @@ from .map.map_panel import MapPanel
 from .panels.actors_panel import ActorsPanel
 from .panels.camera_panel import CameraPanel
 from .panels.link_panel import LinkPanel
+from .panels.inventory_panel import InventoryPanel
 from .panels.movie_panel import MoviePanel
 
 # Height offset for "eye to actor" so the camera sits just above the object, not inside it.
@@ -46,7 +47,7 @@ class MainWindow(QMainWindow):
         self._start_poller(hz)
 
         self._map_panel = MapPanel(self._poller)
-        self._link_panel = LinkPanel()
+        self._link_panel = LinkPanel(self._poller)
         self._camera_panel = CameraPanel(self._poller)
         self._map_panel.focus_requested.connect(
             lambda _name, x, z: self._camera_panel.focus_world(x, z)
@@ -54,6 +55,7 @@ class MainWindow(QMainWindow):
         self._map_panel.actor_focus_requested.connect(self._on_map_actor_focus)
         self._actors_panel = ActorsPanel(self._poller)
         self._movie_panel = MoviePanel(self._poller)
+        self._inventory_panel = InventoryPanel(self._poller)
         self._actors_panel.aim_requested.connect(
             lambda x, y, z: self._camera_panel.fly_to(center=(x, y, z))
         )
@@ -90,6 +92,7 @@ class MainWindow(QMainWindow):
             ("Camera", self._camera_panel),
             ("Actors", self._actors_panel),
             ("Movie", self._movie_panel),
+            ("Inventory", self._inventory_panel),
         ):
             dock = QDockWidget(title, self)
             dock.setWidget(panel)
@@ -157,6 +160,7 @@ class MainWindow(QMainWindow):
         self._camera_panel.update_from(snap)
         self._actors_panel.update_from(snap)
         self._movie_panel.update_from(snap)
+        self._inventory_panel.update_from(snap)
         self._map_panel.apply_snapshot(snap)
 
     # ---- shutdown -----------------------------------------------------------
@@ -169,7 +173,14 @@ class MainWindow(QMainWindow):
             super().closeEvent(event)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if event.type() == QEvent.Type.Wheel and self._actors_panel.is_locked:
+        # Wheel over the map while locked on: adjust orbit distance instead of map zoom.
+        # Elsewhere (actor table, panels) the wheel scrolls normally.
+        if (
+            event.type() == QEvent.Type.Wheel
+            and self._actors_panel.is_locked
+            and isinstance(obj, QWidget)
+            and self._map_panel.isAncestorOf(obj)
+        ):
             delta = event.angleDelta().y()
             if delta != 0:
                 self._actors_panel.adjust_orbit_distance(1 if delta > 0 else -1)

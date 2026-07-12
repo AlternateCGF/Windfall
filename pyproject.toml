@@ -21,4 +21,7 @@ where = ["src"]
 include = ["windfall*"]
 
 [tool.setuptools.package-data]
-windfall = ["assets/*.png", "assets/*.jpg"]
+windfall = ["assets/*.png", "assets/*.jpg", "assets/*.ico"]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0"]

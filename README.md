@@ -36,7 +36,7 @@ Japanese GameCube release (`GZLJ01`); USA (`GZLE01`) is also recognized to a deg
 **Actors** (Actors panel)
 - Live actor table (name, process, position, distance to Link), filterable.
 - Aim the camera at an actor, fly the eye to it, or teleport Link to it.
-- **Lock on / eye follow** — smoothly track a moving actor. While locked, left-drag on the
+- **Lock on / eye follow** — smoothly track a moving actor. While locked, right-drag on the
   map orbits the camera (yaw/pitch, wrap-around yaw) and the mouse wheel adjusts orbit distance.
 - Double-click an island or actor on the map to aim the camera; double-click Link to restore.
 
@@ -46,6 +46,18 @@ Japanese GameCube release (`GZLJ01`); USA (`GZLE01`) is also recognized to a deg
   scrub or play back with smooth easing (loop optional), and save/load timelines as JSON.
 - **Visibility** — hide Link or any actor via the engine's own NODRAW flags
   (the actor stays loaded and active, just unrendered).
+
+**Inventory** (Inventory panel)
+- Stats: max/current HP, rupees, magic (greyed out until the magic meter is obtained;
+  tracks the live max, e.g. doubling once Double Magic is obtained).
+- **Equipment** — clickable icon rows (sword, shield, wallet) using the actual in-game
+  icons; the selected option renders full color, the rest gray out. Writes immediately.
+  Sword includes all Master Sword charge states (uncharged / half / fully charged) for
+  runner testing, not just Hero's Sword and the fully-charged Master Sword.
+- **Item grid** — clickable icon tiles for all 20 inventory slots (16 quick-items plus
+  4 bottles), using the actual in-game icons (`assets/items/`); left-click gives/removes
+  the slot's default item, right-click opens every valid item for that slot (bottle
+  contents for bottles). Writes immediately, no "Apply" step.
 
 ## Setup
 
@@ -73,6 +85,17 @@ Start Dolphin, load Wind Waker, then:
 .venv\Scripts\python -m windfall.tools.discover --test-write
 ```
 
+## Building a standalone .exe
+
+```powershell
+.venv\Scripts\python -m pip install -e .[build]
+.venv\Scripts\python -m PyInstaller windfall.spec
+```
+
+Produces a single-file `dist\Windfall.exe` (icon: `assets/windfall.ico`, bundles `assets/`).
+`run_windfall.py` is the PyInstaller entry point — it imports `windfall` as a package so the
+app's relative imports keep working when frozen; `windfall.spec` controls the bundling.
+
 ## Architecture
 
 ```
@@ -99,3 +122,11 @@ Static addresses come from the [zeldaret/tww](https://github.com/zeldaret/tww) d
 [WW-Hacking-Docs RAM map](https://github.com/LagoLunatic/WW-Hacking-Docs), and verified live
 against a running game (the probe/discover tools exist for exactly that). Struct layouts
 (camera, actors, collision) follow the decomp headers.
+
+## Credits
+
+See [CREDITS.md](CREDITS.md):
+
+- KlydeStorm on DeviantArt for the Wind Waker icons
+- Zelda Reverse Engineering Team (zeldaret) on GitHub for the decompilation
+- The Wind Waker Speed Community for everything

@@ -93,3 +93,28 @@ class Player:
     def get_angle_y_degrees(self) -> float | None:
         raw = self.get_angle_y_raw()
         return None if raw is None else raw * _ANGLE_SCALE
+
+    def angle_address(self) -> int | None:
+        """Absolute address of the writable actor angle, or None."""
+        base, off = self._addr.player_ptr, self._addr.actor_angle_off
+        if base is None or off is None:
+            return None
+        try:
+            actor = self._hook.read_u32(base)
+        except Exception:
+            return None
+        if not self._hook.is_valid_address(actor):
+            return None
+        return actor + off
+
+    def write_angle(self, degrees: float) -> bool:
+        """Write facing angle as degrees (0-360, one-shot)."""
+        addr = self.angle_address()
+        if addr is None:
+            return False
+        try:
+            raw = int(round(degrees / _ANGLE_SCALE)) & 0xFFFF
+            self._hook.write_u16(addr, raw)
+            return True
+        except Exception:
+            return False

@@ -13,9 +13,11 @@ Cross-thread interaction:
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import QMutex, QMutexLocker, QObject, QTimer, Signal, Slot
@@ -23,7 +25,7 @@ from PySide6.QtCore import QMutex, QMutexLocker, QObject, QTimer, Signal, Slot
 from ..addresses.version import GameVersion, detect_version
 from ..game.actors import ActorList
 from ..game.camera import Camera
-from ..game.collision import CollisionReader
+from ..game.collision import CollisionMesh, CollisionReader
 from ..game.player import Player
 from ..memory.hook import DolphinHook
 
@@ -309,6 +311,7 @@ class Poller(QObject):
         self._collision: Optional[CollisionReader] = None
         self._collision_stage: Optional[str] = None
         self._collision_last_tick = 0
+        self._collision_cache: dict[str, list] = {}  # stage_name -> cached collision meshes
         self._tick_count = 0
         self._timer: Optional[QTimer] = None
 
@@ -434,6 +437,7 @@ class Poller(QObject):
             self._actor_list = ActorList(self._hook, version.addr)
             self._collision = CollisionReader(self._hook, version.addr)
             self._collision_stage = None
+            self._load_collision_cache()
 
     def _drain_writes(self) -> None:
         with QMutexLocker(self._mutex):
@@ -497,28 +501,83 @@ class Poller(QObject):
     # Re-read collision this many ticks after the last refresh (~10 s at 30 Hz) to
     # pick up rooms that stream in without a stage-name change.
     _COLLISION_REFRESH_TICKS = 300
+    _COLLISION_CACHE_PATH = Path.cwd() / "windfall_cache" / "collision_cache.json"
+
+    def _save_collision_cache(self) -> None:
+        """Persist the collision cache to disk."""
+        data = {
+            "version": 1,
+            "stages": {
+                name: [m.to_dict() for m in meshes]
+                for name, meshes in self._collision_cache.items()
+            },
+        }
+        try:
+            self._COLLISION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self._COLLISION_CACHE_PATH.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _load_collision_cache(self) -> None:
+        """Load the collision cache from disk into _collision_cache."""
+        try:
+            if not self._COLLISION_CACHE_PATH.exists():
+                return
+            data = json.loads(self._COLLISION_CACHE_PATH.read_text(encoding="utf-8"))
+            if data.get("version") != 1:
+                return
+            self._collision_cache = {
+                name: [CollisionMesh.from_dict(m) for m in meshes]
+                for name, meshes in data.get("stages", {}).items()
+            }
+        except Exception:
+            pass
 
     def _read_collision(self, snap: Snapshot) -> None:
-        """Re-read the collision registry on stage change or periodically."""
+        """Re-read the collision registry on stage change or periodically.
+
+        Collision meshes are cached per stage name so that rooms which have
+        streamed out (Link moved away) stay visible on the map — but only for
+        the *current* stage; switching stages (e.g. into Beedle's ship and back
+        to the sea) must not keep showing a stage you've since left."""
         if self._collision is None:
             return
         stage_changed = snap.stage_name != self._collision_stage
         stale = self._tick_count - self._collision_last_tick >= self._COLLISION_REFRESH_TICKS
         if not (stage_changed or stale):
             return
-        # On a stage change the old meshes are being torn down — wait for a stable
-        # stage name before reading (skip the tick where it flips).
         self._collision_stage = snap.stage_name
         self._collision_last_tick = self._tick_count
-        if snap.stage_name is None:
-            snap.collision = []
-            return
-        snap.collision = self._collision.read_meshes()
+        # Read collision for the current stage (skip during loading screens).
+        if snap.stage_name is not None:
+            meshes = self._collision.read_meshes()
+            if meshes:
+                # Merge into the existing cache so previously-streamed rooms
+                # (which may have streamed out) are kept on the map.
+                existing = self._collision_cache.get(snap.stage_name, [])
+                seen_bgw = {m.bgw_addr for m in existing}
+                for m in meshes:
+                    if m.bgw_addr not in seen_bgw:
+                        existing.append(m)
+                        seen_bgw.add(m.bgw_addr)
+                self._collision_cache[snap.stage_name] = existing
+        # Only the current stage's cache, not every stage ever visited.
+        snap.collision = self._collision_cache.get(snap.stage_name, [])
+        self._save_collision_cache()
 
-    def teleport_link_once(self, x: float, y: float, z: float, duration_s: float = 0.4) -> None:
+    def teleport_link_once(
+        self, x: float, y: Optional[float], z: float, duration_s: float = 0.4
+    ) -> None:
         """Teleport Link and let go: hammer the position for ``duration_s`` (enough to
-        beat the game's per-frame restore), then the target expires on its own."""
+        beat the game's per-frame restore), then the target expires on its own.
+        ``y=None`` leaves height following the live value (falls/settles to ground)."""
         self._hammer.set_target(x, y, z, duration_s=duration_s)
+
+    def write_link_angle(self, degrees: float) -> None:
+        """One-shot write of Link's facing angle (degrees 0-360)."""
+        player = self._player
+        if player is not None:
+            self.queue_write(lambda _h, _p=player, _a=degrees: _p.write_angle(_a))
 
     # ---- camera holds -------------------------------------------------------
     _EYE_HOLD_KEY = "cam_eye"

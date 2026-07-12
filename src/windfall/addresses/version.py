@@ -90,6 +90,11 @@ class Addresses:
     # Empty dict means HUD disable is not supported for this version.
     hud_disable_writes: dict[int, int] = field(default_factory=dict)
 
+    # Player status / inventory offsets from g_dComIfG_gameInfo.
+    # From WW-Hacking-Docs RAM map: game_info + 0x00 has HP/rupees, +0x3C has item slots.
+    player_status_off: Optional[int] = None  # base of player status (HP, rupees, sword, shield)
+    inventory_off: Optional[int] = None  # dSv_player_item_c: 21 item slot bytes
+
 
 @dataclass(frozen=True)
 class GameVersion:
@@ -142,6 +147,9 @@ _JP = Addresses(
     # are after this field in the struct).
     stage_name_off=0x5134,
     # HUD disable: not supported for JP (Ralf's gecko codes only cover USA/PAL).
+    # Player status / inventory (same offsets from game_info for all versions).
+    player_status_off=0x00,  # game_info + 0x00: HP, rupees, sword, shield, wallet
+    inventory_off=0x3C,      # game_info + 0x3C: 21 item slot bytes (dSv_player_item_c)
 )
 
 # --- USA GameCube (bonus / cross-check) -------------------------------------
@@ -161,6 +169,9 @@ _USA = Addresses(
         0x80205BA0: 0x48000040,  # b +0x40 (beq +0x40 → unconditional)
         0x803CA821: 0x00000000,  # visibility byte → 0
     },
+    # Player status / inventory (same offsets from game_info for all versions).
+    player_status_off=0x00,
+    inventory_off=0x3C,
 )
 
 VERSIONS: dict[str, GameVersion] = {
