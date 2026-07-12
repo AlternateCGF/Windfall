@@ -85,7 +85,7 @@ _TERRAIN_COLORS: dict[int, QColor] = {
     ATTR_STONE: QColor(150, 150, 160, 0),
     ATTR_GRASS: QColor(70, 180, 60, 110),
     ATTR_GIANT_FLOWER: QColor(230, 130, 190, 190),
-    ATTR_LAVA: QColor(240, 90, 25, 190),
+    ATTR_LAVA: QColor(240, 90, 25, 100),
     ATTR_VOID: QColor(30, 30, 35, 190),
     ATTR_DAMAGE: QColor(220, 40, 40, 190),
     ATTR_CARPET: QColor(165, 90, 200, 190),
