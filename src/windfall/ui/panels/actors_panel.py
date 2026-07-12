@@ -198,8 +198,8 @@ class ActorsPanel(QWidget):
         self._pending_select: Optional[int] = None
         self._yaw_lock_offset: Optional[tuple[float, float, float]] = None
 
-        # Double-clicking a row focuses the camera on it — the most common action.
-        self._table.itemDoubleClicked.connect(lambda _item: self._on_focus())
+        # Double-clicking a row locks on and eye-follows it — the most common action.
+        self._table.itemDoubleClicked.connect(self._on_row_double_clicked)
 
     # ---- refresh --------------------------------------------------------------
     def update_from(self, snap: Snapshot) -> None:
@@ -222,9 +222,21 @@ class ActorsPanel(QWidget):
             self.select_actor(pending)
         self._count_lbl.setText(f"{len(actors)}/{len(snap.actors)}")
 
+        # If Dolphin/the game closes, every actor address is now invalid — release
+        # every lock. This can't be folded into the "despawned" check below: while
+        # disconnected, snap.actors is always [], so that check never sees a game
+        # to compare against and would otherwise leave locks stuck on forever.
+        if not snap.connected:
+            if self.is_locked:
+                self.release_all_locks()
+            if self._auto_addr is not None:
+                self._auto_addr = None
+                self._auto_pid = None
+                self._auto_target_lbl.setText("")
+                self._poller.clear_center_track()
         # If a locked actor despawned, release its lock (the poller hold also
         # self-cancels via its pid check; this just syncs the buttons).
-        if snap.actors:
+        elif snap.actors:
             live = {a.address for a in snap.actors}
             if self._locked_addr is not None and self._locked_addr not in live:
                 self._lock_btn.setChecked(False)
@@ -418,6 +430,11 @@ class ActorsPanel(QWidget):
         if 0 <= row < len(self._actors):
             return self._actors[row]
         return None
+
+    def _on_row_double_clicked(self, item) -> None:
+        row = item.row()
+        if 0 <= row < len(self._actors):
+            self.lock_on_actor(self._actors[row].address)
 
     def _on_aim(self) -> None:
         a = self._selected_actor()

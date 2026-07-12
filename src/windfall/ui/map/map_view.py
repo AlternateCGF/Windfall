@@ -6,7 +6,7 @@ the view transform handle pan/zoom for free and keeps click<->world conversion a
 Interactions:
   * wheel              : zoom about the cursor
   * left-drag Link     : teleport — pins X/Z each tick via the poller hold (Y captured at grab so he
-                         slides at constant height); on release the hold clears unless "freeze" is on.
+                         slides at constant height); the hold clears on release
   * left-drag empty    : pan
   * right-drag         : pan; while locked on an actor, orbits the camera (yaw/pitch)
   * right-click (no drag): context menu with "Teleport Link Here" at that world point
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QMenu
 
 from ...core.poller import Poller, Snapshot
 from ...game.actors import ActorInfo, is_ambient
+from ...game.collision import ground_height_below
 from .islands import ISLANDS, SECTOR_SIZE, Island
 
 # World Y is up; the top-down map uses world X (horizontal) and world Z (vertical).
@@ -41,6 +42,20 @@ _LINK_KEY = -1  # motion-dict key for Link (actor keys are addresses, always pos
 # Right-click is a context-menu click if the cursor stays within this many screen
 # pixels of where the button went down; beyond that it's a pan drag.
 _RIGHT_CLICK_DRAG_THRESHOLD = 6.0
+
+# World units placed above the detected ground surface when right-click teleporting,
+# so Link lands just above it instead of exactly on it (avoids clipping into the floor).
+_TELEPORT_GROUND_CLEARANCE = 5.0
+
+# Fallback altitude when the clicked point has no cached collision data yet (e.g. a
+# distant sea sector Link hasn't visited/streamed in this session). Leaving Y to just
+# "follow gravity" in that case is what let him teleport under the map: gravity keeps
+# pulling him down while the destination's terrain is still streaming in, so by the
+# time it appears he may already have fallen past it. Placing him safely high instead
+# means whatever loads in below him, he's still above it — the trade-off is a visible
+# fall the first moment he arrives somewhere new, which is far better than ending up
+# stuck under the map.
+_TELEPORT_SAFE_ALTITUDE = 3000.0
 
 # Movement blip: expanding rings that spawn when Link moves.
 _BLIP_EXPAND_SPEED = 400.0   # world units per second (radius growth)
@@ -91,6 +106,7 @@ class MapView(QGraphicsView):
         self.scale(0.05, 0.05)
 
         self._link_world: Optional[QPointF] = None
+        self._link_y: Optional[float] = None
         self._link_angle_deg: float = 0.0
         self._have_centered = False
         self._face: Optional[QPixmap] = _load_link_face()
@@ -102,6 +118,8 @@ class MapView(QGraphicsView):
         self._show_bounds = False
         self._collision_path: Optional[QPainterPath] = None
         self._collision_sig: Optional[tuple] = None
+        # Kept (not just the render path) so right-click teleport can look up ground height.
+        self._collision_meshes: list = []
         # Cached raster of the collision layer: re-rendered only on zoom change,
         # when the view leaves the cached region, or when the collision data updates.
         self._collision_pixmap: Optional[QPixmap] = None
@@ -121,7 +139,6 @@ class MapView(QGraphicsView):
         self._right_panning = False
         self._right_panning_last = None
         self._right_press_pos: Optional[QPointF] = None
-        self.freeze = False
 
         # Orbit drag: when enabled, left-drag rotates the camera orbit (yaw/pitch).
         self._orbit_drag_mode = False
@@ -158,8 +175,9 @@ class MapView(QGraphicsView):
             return
         self._actors = [a for a in snap.actors if a.name != "Link" and not is_ambient(a.name)]
         self._link_actor = next((a for a in snap.actors if a.name == "Link"), None)
-        x, _y, z = snap.link_pos
+        x, y, z = snap.link_pos
         self._link_world = QPointF(x, z)
+        self._link_y = y
         if snap.link_angle_deg is not None:
             self._link_angle_deg = snap.link_angle_deg
         self.link_moved.emit(x, z)
@@ -258,6 +276,7 @@ class MapView(QGraphicsView):
         if sig == self._collision_sig:
             return
         self._collision_sig = sig
+        self._collision_meshes = meshes
         if not meshes:
             self._collision_path = None
             return
@@ -782,11 +801,7 @@ class MapView(QGraphicsView):
             return
         if self._dragging_link:
             self._dragging_link = False
-            if not self.freeze:
-                self._poller.clear_position_hold()
-            elif self._link_world is not None:
-                # True freeze: also pin Y where he is now, so he hangs at the drop spot.
-                self._poller.freeze_position(self._link_world.x(), self._link_world.y())
+            self._poller.clear_position_hold()
             self.viewport().update()
         if self._panning:
             self._panning = False
@@ -800,19 +815,22 @@ class MapView(QGraphicsView):
         action = menu.addAction("Teleport Link Here")
         chosen = menu.exec(self.mapToGlobal(view_pos.toPoint()))
         if chosen is action:
-            # Y left following the live value so Link falls/settles to the ground,
-            # same as dragging him on the map.
-            self._poller.teleport_link_once(world.x(), None, world.y())
+            y = self._teleport_y_for(world.x(), world.y())
+            self._poller.teleport_link_once(world.x(), y, world.y())
+
+    def _teleport_y_for(self, x: float, z: float) -> float:
+        """Ground height at (x, z) plus clearance, so a right-click teleport can't drop
+        Link under the map. Falls back to a safe high altitude (not gravity) when no
+        loaded collision covers that point — see _TELEPORT_SAFE_ALTITUDE."""
+        ground = ground_height_below(self._collision_meshes, x, z, max_y=self._link_y)
+        if ground is None:
+            return _TELEPORT_SAFE_ALTITUDE
+        return ground + _TELEPORT_GROUND_CLEARANCE
 
     def _apply_teleport(self, world: QPointF) -> None:
         # Pin X/Z to the cursor; keep Y following the live value (None) so Link settles to ground.
         self._poller.set_position_hold(x=world.x(), z=world.y(), y=None)
         self._link_world = world
-
-    def clear_hold_if_not_frozen(self) -> None:
-        if not self.freeze:
-            self._poller.clear_position_hold()
-
 
 def _nice_step(raw: float) -> float:
     """Round a raw world distance up to a 1/2/5 x 10^n step."""

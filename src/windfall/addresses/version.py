@@ -4,9 +4,13 @@ Addresses are sourced from the CGF95/tww decompilation symbol maps
 (config/<GAMEID>/symbols.txt) and cross-referenced with the community RAM map at
 https://github.com/LagoLunatic/WW-Hacking-Docs .
 
-Primary target is the Japanese GameCube release (GZLJ01). USA (GZLE01) values are included
-because the same symbol names resolve cleanly in both maps — a nice free bonus and a sanity
-check. Fields we haven't yet verified live are left as ``None`` and filled in during M1.
+Primary target is the Japanese GameCube release (GZLJ01). USA (GZLE01) is a full second
+table, sourced the same way: static globals are cross-referenced by symbol name against
+config/GZLE01/symbols.txt. The two fields that aren't separate symbols — player_ptr and
+camera_ptr, each computed as game_info + a struct offset — needed one extra step (see the
+comment above ``_USA``) since the decomp documents a JP/USA game_info layout difference
+that shifts those particular offsets. Fields we haven't yet verified live are left as
+``None`` and filled in during M1.
 
 Verification status of the static player globals (as of M0):
   - ``link_pos`` is the decomp symbol ``l_debug_keep_pos`` (3 floats X/Y/Z, size 0xC).
@@ -152,13 +156,55 @@ _JP = Addresses(
     inventory_off=0x3C,      # game_info + 0x3C: 21 item slot bytes (dSv_player_item_c)
 )
 
-# --- USA GameCube (bonus / cross-check) -------------------------------------
+# --- USA GameCube ------------------------------------------------------------
+# Static globals below are cross-referenced by symbol name against the tww decomp's
+# config/GZLE01/symbols.txt (same method used to source the JP table), so they carry
+# the same confidence as JP's — except player_ptr/camera_ptr, which aren't separate
+# symbols (they're computed as game_info + a struct offset) and needed one extra
+# step: the decomp notes JPN's g_dComIfG_gameInfo is missing 3 fields
+# (mpHyruleTextArchive/field_0x481c/field_0x4820, 0xC bytes total) that USA/PAL have,
+# which shifts every field from mCameraInfo onward 0xC bytes later in USA relative to
+# JP. Both player_ptr and camera_ptr fall after that point, so their USA offsets are
+# JP's + 0xC. This is a documented structural fact, not a guess, but — like every
+# other M1 field — should still be sanity-checked live with tools/discover.py before
+# depending on it (see the module docstring).
 _USA = Addresses(
     game_id="GZLE01",
     label="Wind Waker (USA, GameCube)",
     game_info=0x803C4C08,
     link_pos=0x803E440C,
     link_angle_y=0x803F6F10 + 2,
+    retrace_count=0x803F7B3C,  # retraceCount
+    player_accessor=0x800F0F1C,  # daPy_getPlayerLinkActorClass__Fv
+    cam_get_body=0x8017BDFC,  # dCam_getBody__Fv
+    # game_info + 0x5B4C (JP's 0x5B40 + the 0xC USA/JP struct-layout shift, see above).
+    player_ptr=0x803CA754,
+    # current.pos offset inside the actor — struct-internal to fopAc_ac_c, not
+    # g_dComIfG_gameInfo, so unaffected by the JP/USA game_info shift above; same
+    # value as JP.
+    player_pos_off=0x01F8,
+    # game_info + 0x5B10 (JP's 0x5B04 + the 0xC shift).
+    camera_ptr=0x803CA718,
+    # dCamera_c/camera_class layout is region-invariant (same as player_pos_off).
+    camera=CameraOffsets(
+        cam_class_off=0x244,
+        eye=0x01C,
+        center=0x010,
+        up=0x028,
+        fovy=0x038,
+        roll=0x034,
+    ),
+    actor_queue_head=0x80372028,  # g_fopAcTg_Queue
+    # fopAc_ac_c-internal offsets — region-invariant, same as JP.
+    actor_node_off=0x0C4,
+    actor_pos_off=0x1F8,
+    actor_angle_off=0x206,
+    actor_cull_type_off=0x1BF,
+    actor_cull_mtx_off=0x22C,
+    actor_cull_data_off=0x230,
+    objectname_table=0x80372818,  # l_objectName
+    # Same byte size as JP's table (0x26AC in both symbol maps) -> same entry count.
+    objectname_count=862,
     stage_name_off=0x5134,
     # HUD disable: Ralf's gecko codes for NTSC-U.
     # 0x801F60AC NOP skips the HUD draw call, 0x80205A7C/0x80205BA0 make branches

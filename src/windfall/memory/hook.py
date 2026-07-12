@@ -44,24 +44,26 @@ class DolphinHook:
     # ---- connection ---------------------------------------------------------
     def connect(self) -> bool:
         """Attempt to hook a running Dolphin with active emulation. Returns True on success."""
-        if not dme.is_hooked():
+        if not self.is_connected():
             dme.hook()
-        return dme.is_hooked()
+        return self.is_connected()
 
     def disconnect(self) -> None:
-        if dme.is_hooked():
+        if self.is_connected():
             dme.un_hook()
 
     def is_connected(self) -> bool:
-        # get_status() also re-validates the hook if emulation stopped.
-        return dme.is_hooked()
+        # is_hooked() is just a cached flag from the last hook() call — it doesn't notice
+        # Dolphin or the emulated game closing later, so the UI would keep showing
+        # "Hooked" forever. get_status() actively re-probes the process each call.
+        return dme.get_status().name == "hooked"
 
     @staticmethod
     def is_valid_address(addr: int) -> bool:
         return (_MEM1_START <= addr < _MEM1_END) or (_MEM2_START <= addr < _MEM2_END)
 
     def _require(self, addr: int) -> None:
-        if not dme.is_hooked():
+        if not self.is_connected():
             raise NotHookedError("Dolphin is not hooked")
         if not self.is_valid_address(addr):
             raise ValueError(f"address 0x{addr:08X} outside emulated RAM")

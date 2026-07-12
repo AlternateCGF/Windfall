@@ -1,63 +1,34 @@
 # Windfall
 
 A [STROOP](https://github.com/SM64-TAS-ABC/STROOP)-style real-time memory inspector and
-manipulator for **The Legend of Zelda: The Wind Waker** running in Dolphin. Primary target is the
-Japanese GameCube release (`GZLJ01`); USA (`GZLE01`) is also recognized to a degree.
+manipulator for **The Legend of Zelda: The Wind Waker** running in Dolphin. Supports both
+the Japanese (`GZLJ01`) and USA (`GZLE01`) GameCube releases — player/camera control, actor
+enumeration, and inventory editing all work on either.
 
-## What it does
+## Features
 
-**Interactive map** (central panel)
-- Live top-down map of the Great Sea in world coordinates: sea-chart grid (A–G / 1–7),
-  island name markers, and Link's position/facing (with his face as the marker).
-- **Drag Link to teleport** — pins his X/Z to the cursor while you drag; optional
-  "freeze on release" holds him at the drop spot.
-- **Collision overlay** — reads the loaded collision geometry (DZB meshes registered with
-  the game's `dBgS` manager) straight out of memory and draws island/terrain outlines.
-  Refreshes on stage change and periodically as rooms stream in; rendered via a cached
-  raster so it stays smooth.
-- Live actor markers with hover labels; optional cull-volume bounds overlay;
-  pan / wheel-zoom; auto-follow Link; toggles for grid / islands / actors / collision.
+**Interactive map** — top-down view of the Great Sea with the sea-chart grid, island
+markers, live actors, and a collision overlay read straight out of memory.
+- Drag Link to teleport, or right-click anywhere for a "Teleport Link Here" menu — it
+  looks up the ground height under the click so he lands on solid ground instead of
+  falling under the map.
+- Double-click an actor (here or in the Actors panel) to lock on and eye-follow it;
+  double-click Link to release and restore the camera.
 
-**Camera control** (Camera panel)
-- Live readout of eye / look-at center / FoV / bank.
-- Lock any of them to override the game's camera (the camera update is paused while locked).
-- Smooth eased transitions ("Go") between the current view and target values.
-- **Move Camera pad** — arrow buttons fly the camera relative to where it faces
-  (forward/back, strafe left/right, raise/lower), with an adjustable step size;
-  hold a button to repeat. Moving auto-engages the eye/center locks so the game
-  can't pull the camera back.
-- **Keyboard fly** — the arrow keys (forward/back/strafe) and PageUp/PageDown
-  (up/down) move the camera from anywhere in the app, with smooth ease-in and
-  glide-out, normalized diagonals, and speed tied to the same Step value. Keys are
-  ignored while a spinbox, slider, list, or text field has focus. While locked on
-  an actor the same keys steer the orbit instead: ←/→ yaw around it, ↑/↓ dolly
-  in/out, PgUp/PgDn tilt.
+**Camera control** — live eye/center/FoV/bank readout, lockable to override the game's own
+camera. Smooth eased transitions between views, an arrow-button fly pad, and keyboard flying
+(arrows + PageUp/PageDown) that steers an orbit instead while locked on an actor.
 
-**Actors** (Actors panel)
-- Live actor table (name, process, position, distance to Link), filterable.
-- Aim the camera at an actor, fly the eye to it, or teleport Link to it.
-- **Lock on / eye follow** — smoothly track a moving actor. While locked, right-drag on the
-  map orbits the camera (yaw/pitch, wrap-around yaw) and the mouse wheel adjusts orbit distance.
-- Double-click an island or actor on the map to aim the camera; double-click Link to restore.
+**Actors** — filterable live actor table with distance-to-Link. Lock on / eye-follow smoothly
+tracks a moving actor; right-drag orbits the camera around it and the wheel adjusts distance.
 
-**Movie helpers** (Movie panel)
-- HUD hide (USA version).
-- **Camera timeline** — capture camera poses as keyframes, reorder/retime them,
-  scrub or play back with smooth easing (loop optional), and save/load timelines as JSON.
-- **Visibility** — hide Link or any actor via the engine's own NODRAW flags
-  (the actor stays loaded and active, just unrendered).
+**Movie helpers** — a camera timeline (keyframe, retime, scrub/play, save/load as JSON),
+per-actor visibility (NODRAW, stays loaded), and HUD hide (USA).
 
-**Inventory** (Inventory panel)
-- Stats: max/current HP, rupees, magic (greyed out until the magic meter is obtained;
-  tracks the live max, e.g. doubling once Double Magic is obtained).
-- **Equipment** — clickable icon rows (sword, shield, wallet) using the actual in-game
-  icons; the selected option renders full color, the rest gray out. Writes immediately.
-  Sword includes all Master Sword charge states (uncharged / half / fully charged) for
-  runner testing, not just Hero's Sword and the fully-charged Master Sword.
-- **Item grid** — clickable icon tiles for all 20 inventory slots (16 quick-items plus
-  4 bottles), using the actual in-game icons (`assets/items/`); left-click gives/removes
-  the slot's default item, right-click opens every valid item for that slot (bottle
-  contents for bottles). Writes immediately, no "Apply" step.
+**Inventory** — icon-based editor using the game's real item/equipment icons. Stats, all
+equipment options (including every Master Sword charge state and a magic meter that tracks
+Double Magic), and the full 20-slot item grid (bottles included) all write immediately, no
+"Apply" step.
 
 ## Setup
 
@@ -68,11 +39,7 @@ python -m venv .venv
 .venv\Scripts\python -m pip install -e .
 ```
 
-Dependencies (installed by the above): `PySide6`, `dolphin-memory-engine`.
-
 ## Running
-
-Start Dolphin, load Wind Waker, then:
 
 ```powershell
 # GUI
@@ -92,24 +59,25 @@ Start Dolphin, load Wind Waker, then:
 .venv\Scripts\python -m PyInstaller windfall.spec
 ```
 
-Produces a single-file `dist\Windfall.exe` (icon: `assets/windfall.ico`, bundles `assets/`).
-`run_windfall.py` is the PyInstaller entry point — it imports `windfall` as a package so the
-app's relative imports keep working when frozen; `windfall.spec` controls the bundling.
+Produces `dist\Windfall.exe` (~29 MB — the spec strips Qt modules/plugins the app never
+uses, since PySide6's PyInstaller hook otherwise bundles most of Qt regardless of what's
+actually imported).
 
 ## Architecture
 
 ```
 src/windfall/
-  memory/hook.py        # DolphinHook: the only code that touches emulated RAM (big-endian explicit)
-  addresses/version.py  # per-region address tables + game-id detection
-  game/player.py        # typed Link accessors (position, angle)
-  game/camera.py        # dCamera_c accessors (eye/center/up/fovy/bank, pause/freeze)
-  game/actors.py        # live actor-queue enumeration
-  game/collision.py     # dBgS collision registry -> DZB triangle meshes (XZ projected)
-  core/poller.py        # worker-thread polling loop: snapshots out, held/queued writes in
-                        #   + 1 kHz position hammer and ~300 Hz camera tracker threads
-  ui/                   # PySide6: main window, connection bar, map, dockable panels
-  tools/                # headless verification / address-discovery CLIs
+  memory/hook.py         # DolphinHook: the only code that touches emulated RAM (big-endian explicit)
+  addresses/version.py   # per-region address tables + game-id detection
+  game/player.py          # typed Link accessors (position, angle)
+  game/camera.py          # dCamera_c accessors (eye/center/up/fovy/bank, pause/freeze)
+  game/actors.py          # live actor-queue enumeration
+  game/collision.py       # dBgS collision registry -> DZB triangle meshes + ground-height queries
+  game/inventory.py       # player stats/equipment/inventory-slot read & write
+  core/poller.py          # worker-thread polling loop: snapshots out, held/queued writes in
+                          #   + 1 kHz position hammer and ~300 Hz camera tracker threads
+  ui/                     # PySide6: main window, connection bar, map, dockable panels
+  tools/                  # headless verification / address-discovery CLIs
 ```
 
 Design rule: nothing but `memory/hook.py` imports `dolphin_memory_engine`, so the backend and
@@ -117,11 +85,13 @@ address tables stay swappable.
 
 ## Address sourcing
 
-Static addresses come from the [zeldaret/tww](https://github.com/zeldaret/tww) decompilation symbol maps
-(`config/<GAMEID>/symbols.txt`), cross-referenced with the
-[WW-Hacking-Docs RAM map](https://github.com/LagoLunatic/WW-Hacking-Docs), and verified live
-against a running game (the probe/discover tools exist for exactly that). Struct layouts
-(camera, actors, collision) follow the decomp headers.
+Static addresses for both regions come from the [zeldaret/tww](https://github.com/zeldaret/tww)
+decompilation's per-version symbol maps (`config/<GAMEID>/symbols.txt`), cross-referenced with
+the [WW-Hacking-Docs RAM map](https://github.com/LagoLunatic/WW-Hacking-Docs) and verified live
+against a running game (`tools/probe.py` / `tools/discover.py` exist for exactly that). Struct
+layouts (camera, actors, collision) follow the decomp headers. See the comments above `_JP`/`_USA`
+in `addresses/version.py` for the handful of fields that needed extra care (mainly a documented
+JP/USA layout difference affecting two pointer offsets).
 
 ## Credits
 

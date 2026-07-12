@@ -31,10 +31,6 @@ class MapPanel(QWidget):
         self._poller = poller
         self._view = MapView(poller)
 
-        self._freeze = QCheckBox("Freeze on release")
-        self._freeze.setToolTip("Keep holding Link at the dropped spot after you let go.")
-        self._freeze.toggled.connect(self._on_freeze)
-
         self._follow = QCheckBox("Follow")
         self._follow.setChecked(True)
         self._follow.setToolTip("Keep the camera centered on Link as he moves.")
@@ -78,7 +74,6 @@ class MapPanel(QWidget):
             lbl.setStyleSheet("color:#9aa;")
 
         bar = QHBoxLayout()
-        bar.addWidget(self._freeze)
         bar.addWidget(self._follow)
         bar.addWidget(recenter)
         bar.addWidget(release)
@@ -118,12 +113,6 @@ class MapPanel(QWidget):
     def set_orbit_drag_mode(self, enabled: bool) -> None:
         """Enable/disable orbit drag on the map view."""
         self._view.set_orbit_drag_mode(enabled)
-
-    def _on_freeze(self, on: bool) -> None:
-        self._view.freeze = on
-        if not on:
-            # Turning freeze off should let go immediately if we're not actively dragging.
-            self._view.clear_hold_if_not_frozen()
 
     def _on_follow(self, on: bool) -> None:
         self._view.set_auto_follow(on)

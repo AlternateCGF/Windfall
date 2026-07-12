@@ -249,6 +249,12 @@ class CameraPanel(QWidget):
 
     # ---- called by MainWindow each tick -------------------------------------
     def update_from(self, snap: Snapshot) -> None:
+        # Dolphin/the game closed: every hold is now pinning a dead pointer. Release
+        # them (restore() is a no-op past the first tick, since unchecking an already-
+        # unchecked box doesn't re-fire toggled).
+        if not snap.connected:
+            self.restore()
+
         if snap.cam_eye is not None:
             self._last_eye = snap.cam_eye
             x, y, z = snap.cam_eye

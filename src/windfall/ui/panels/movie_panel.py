@@ -553,6 +553,13 @@ class MoviePanel(QWidget):
         """Called each tick — HUD availability, timeline playback, actor list."""
         self._last_snap = snap
 
+        # Dolphin/the game closed: hidden-actor addresses are from the old session and
+        # would otherwise get force-reapplied to whatever unrelated actor happens to
+        # reuse those addresses on the next connect.
+        if not snap.connected and self._hidden_actors:
+            self._hidden_actors.clear()
+            self._poller.clear_fast_hold("actor_visibility")
+
         supported = snap.game_id in _HUD_SUPPORTED_GAME_IDS if snap.game_id else False
         self._disable_hud.setEnabled(supported)
         if not supported and self._disable_hud.isChecked():

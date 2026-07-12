@@ -97,6 +97,8 @@ class MainWindow(QMainWindow):
             dock = QDockWidget(title, self)
             dock.setWidget(panel)
             dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+            # No close ("x") button on the tabs — these panels should always be available.
+            dock.setFeatures(dock.features() & ~QDockWidget.DockWidgetFeature.DockWidgetClosable)
             self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
             docks.append(dock)
         for prev, nxt in zip(docks, docks[1:]):
@@ -183,7 +185,7 @@ class MainWindow(QMainWindow):
         ):
             delta = event.angleDelta().y()
             if delta != 0:
-                self._actors_panel.adjust_orbit_distance(1 if delta > 0 else -1)
+                self._actors_panel.adjust_orbit_distance(-1 if delta > 0 else 1)
             return True
         # Arrow / PageUp / PageDown keys fly the camera, unless an input widget
         # that needs them (spinbox, slider, list, text field) has focus.

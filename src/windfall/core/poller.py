@@ -383,22 +383,24 @@ class Poller(QObject):
     def clear_position_hold(self) -> None:
         self._hammer.clear()
 
-    def freeze_position(self, x: float, z: float) -> None:
-        """Pin X/Z at the given spot and Y at its current live value — a true freeze
-        (Link hangs where he was dropped instead of falling; Y left unpinned would
-        keep following gravity)."""
-        y = None
-        if self._player is not None:
-            pos = self._player.get_actor_position() or self._player.get_position()
-            if pos is not None:
-                y = pos.y
-        self._hammer.set_target(x, y, z)
-
     # ---- the tick -----------------------------------------------------------
     def _tick(self) -> None:
         snap = Snapshot()
-
         self._tick_count += 1
+        try:
+            self._tick_body(snap)
+        except Exception:
+            # Whatever broke (e.g. Dolphin/the game closing mid-read, an OS-level
+            # error from the hook library on a now-stale handle), never let it
+            # silently swallow this tick: the timer keeps firing regardless, so a
+            # tick that dies before emitting would leave the UI frozen showing
+            # whatever it last displayed — "Hooked" forever, even with the game
+            # closed. Fall back to reporting disconnected instead.
+            snap = Snapshot()
+            snap.connected = False
+        self.snapshot.emit(snap)
+
+    def _tick_body(self, snap: Snapshot) -> None:
         if not self._hook.is_connected():
             self._version = None
             self._player = None
@@ -421,23 +423,26 @@ class Poller(QObject):
             self._read_actors(snap)
             self._read_collision(snap)
 
-        self.snapshot.emit(snap)
-
     _last_game_id: Optional[str] = None
 
     def _ensure_version(self) -> None:
-        if self._version is not None:
-            return
+        """(Re)detect the running game every tick — not just once — so switching games
+        in Dolphin without a full disconnect (e.g. JP -> USA) is picked up. Rebuilding
+        the version-dependent readers only happens when the detected game_id actually
+        changes; this is otherwise just a cheap 6-byte read once per tick."""
         game_id, version = detect_version(self._hook)
         self._last_game_id = game_id
-        if version is not None:
-            self._version = version
-            self._player = Player(self._hook, version.addr)
-            self._camera = Camera(self._hook, version.addr)
-            self._actor_list = ActorList(self._hook, version.addr)
-            self._collision = CollisionReader(self._hook, version.addr)
-            self._collision_stage = None
-            self._load_collision_cache()
+        if version is None:
+            return
+        if self._version is not None and version.game_id == self._version.game_id:
+            return
+        self._version = version
+        self._player = Player(self._hook, version.addr)
+        self._camera = Camera(self._hook, version.addr)
+        self._actor_list = ActorList(self._hook, version.addr)
+        self._collision = CollisionReader(self._hook, version.addr)
+        self._collision_stage = None
+        self._load_collision_cache()
 
     def _drain_writes(self) -> None:
         with QMutexLocker(self._mutex):

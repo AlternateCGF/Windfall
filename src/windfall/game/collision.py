@@ -9,13 +9,15 @@ Structure chain (offsets from the CGF95/tww decomp; array offset verified live):
         cBgD_t: s32 v_num; Vtx* v_tbl; s32 t_num; Tri* t_tbl; ...
           Vtx = 3 x f32 (12 bytes) ; Tri = 5 x u16 (10 bytes: vtx0, vtx1, vtx2, id, grp)
 
-Only X/Z are kept — the interactive map is top-down.
+X/Z drive the top-down map; Y is kept alongside (not projected away) so a teleport
+target's ground height can be looked up via ``ground_height_below``.
 """
 
 from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
+from typing import Optional
 
 from ..addresses.version import Addresses
 from ..memory.hook import DolphinHook
@@ -33,20 +35,29 @@ _MAX_TRIS = 200_000
 
 @dataclass
 class CollisionMesh:
-    """One registered cBgW's triangles projected to world XZ."""
+    """One registered cBgW's triangles (world XZ for the map, plus each vertex's Y)."""
 
     bgw_addr: int
     # Flat triangle list: (x0, z0, x1, z1, x2, z2) per triangle.
     tris: list[tuple[float, float, float, float, float, float]] = field(default_factory=list)
+    # Parallel to tris: (y0, y1, y2) per triangle, for ground-height lookups.
+    tris_y: list[tuple[float, float, float]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"bgw_addr": self.bgw_addr, "tris": [list(t) for t in self.tris]}
+        return {
+            "bgw_addr": self.bgw_addr,
+            "tris": [list(t) for t in self.tris],
+            "tris_y": [list(t) for t in self.tris_y],
+        }
 
     @classmethod
     def from_dict(cls, d: dict) -> CollisionMesh:
         return cls(
             bgw_addr=d["bgw_addr"],
             tris=[tuple(t) for t in d.get("tris", [])],
+            # Absent in caches saved before tris_y existed — ground lookups just get
+            # no data for those (still-cached) meshes until the stage is re-read.
+            tris_y=[tuple(t) for t in d.get("tris_y", [])],
         )
 
 
@@ -101,6 +112,7 @@ class CollisionReader:
         verts = struct.unpack(f">{v_num * 3}f", v_raw)
         mesh = CollisionMesh(bgw_addr=bgw)
         tris = mesh.tris
+        tris_y = mesh.tris_y
         for t in range(t_num):
             i0, i1, i2 = struct.unpack_from(">HHH", t_raw, t * 10)
             if i0 >= v_num or i1 >= v_num or i2 >= v_num:
@@ -112,4 +124,51 @@ class CollisionReader:
                     verts[i2 * 3], verts[i2 * 3 + 2],
                 )
             )
+            tris_y.append((verts[i0 * 3 + 1], verts[i1 * 3 + 1], verts[i2 * 3 + 1]))
         return mesh
+
+
+def _barycentric_xz(
+    px: float, pz: float,
+    x0: float, z0: float, x1: float, z1: float, x2: float, z2: float,
+) -> Optional[tuple[float, float, float]]:
+    """Barycentric weights of (px, pz) in triangle (x0,z0)-(x1,z1)-(x2,z2), or None if outside."""
+    denom = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2)
+    if abs(denom) < 1e-9:
+        return None  # degenerate (zero-area when projected to XZ)
+    a = ((z1 - z2) * (px - x2) + (x2 - x1) * (pz - z2)) / denom
+    b = ((z2 - z0) * (px - x2) + (x0 - x2) * (pz - z2)) / denom
+    c = 1.0 - a - b
+    epsilon = -1e-6
+    if a < epsilon or b < epsilon or c < epsilon:
+        return None
+    return a, b, c
+
+
+def ground_height_below(
+    meshes: list[CollisionMesh],
+    x: float,
+    z: float,
+    max_y: Optional[float] = None,
+    margin: float = 50.0,
+) -> Optional[float]:
+    """Highest collision surface at world (x, z), or None if no triangle covers that point.
+
+    When ``max_y`` is given (e.g. Link's current height), surfaces more than ``margin``
+    above it are ignored — so a roof/floor above the reference point doesn't get picked
+    over the ground beneath it. Interpolates each triangle's Y via barycentric weights,
+    since collision meshes aren't flat."""
+    best: Optional[float] = None
+    limit = None if max_y is None else max_y + margin
+    for mesh in meshes:
+        for (x0, z0, x1, z1, x2, z2), (y0, y1, y2) in zip(mesh.tris, mesh.tris_y):
+            bc = _barycentric_xz(x, z, x0, z0, x1, z1, x2, z2)
+            if bc is None:
+                continue
+            a, b, c = bc
+            y = a * y0 + b * y1 + c * y2
+            if limit is not None and y > limit:
+                continue
+            if best is None or y > best:
+                best = y
+    return best
