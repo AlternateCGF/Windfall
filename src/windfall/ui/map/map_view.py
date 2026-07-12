@@ -47,14 +47,10 @@ _RIGHT_CLICK_DRAG_THRESHOLD = 6.0
 # so Link lands just above it instead of exactly on it (avoids clipping into the floor).
 _TELEPORT_GROUND_CLEARANCE = 5.0
 
-# Fallback altitude when the clicked point has no cached collision data yet (e.g. a
-# distant sea sector Link hasn't visited/streamed in this session). Leaving Y to just
-# "follow gravity" in that case is what let him teleport under the map: gravity keeps
-# pulling him down while the destination's terrain is still streaming in, so by the
-# time it appears he may already have fallen past it. Placing him safely high instead
-# means whatever loads in below him, he's still above it — the trade-off is a visible
-# fall the first moment he arrives somewhere new, which is far better than ending up
-# stuck under the map.
+# Fallback altitude when the clicked point has no cached collision yet (e.g. a distant,
+# unvisited sea sector). Leaving Y to gravity there is what let Link fall under the map
+# while the destination streamed in; placing him safely high guarantees he's above
+# whatever loads below, at the cost of a visible fall on arrival.
 _TELEPORT_SAFE_ALTITUDE = 3000.0
 
 # Movement blip: expanding rings that spawn when Link moves.

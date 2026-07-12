@@ -152,12 +152,11 @@ def ground_height_below(
     max_y: Optional[float] = None,
     margin: float = 50.0,
 ) -> Optional[float]:
-    """Highest collision surface at world (x, z), or None if no triangle covers that point.
+    """Highest collision surface at world (x, z), or None if uncovered.
 
-    When ``max_y`` is given (e.g. Link's current height), surfaces more than ``margin``
-    above it are ignored — so a roof/floor above the reference point doesn't get picked
-    over the ground beneath it. Interpolates each triangle's Y via barycentric weights,
-    since collision meshes aren't flat."""
+    ``max_y`` (e.g. Link's current height) + ``margin`` excludes surfaces too far
+    above the reference, so a roof doesn't get picked over the floor beneath it.
+    Y is barycentric-interpolated per triangle since meshes aren't flat."""
     best: Optional[float] = None
     limit = None if max_y is None else max_y + margin
     for mesh in meshes:

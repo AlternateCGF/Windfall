@@ -23,7 +23,8 @@ camera. Smooth eased transitions between views, an arrow-button fly pad, and key
 tracks a moving actor; right-drag orbits the camera around it and the wheel adjusts distance.
 
 **Movie helpers** — a camera timeline (keyframe, retime, scrub/play, save/load as JSON),
-per-actor visibility (NODRAW, stays loaded), and HUD hide (USA).
+per-actor visibility (NODRAW, stays loaded), and HUD hide (USA only for now — JP
+needs more decomp coverage of d_meter/d_map first, see `addresses/version.py`).
 
 **Inventory** — icon-based editor using the game's real item/equipment icons. Stats, all
 equipment options (including every Master Sword charge state and a magic meter that tracks

@@ -1,23 +1,17 @@
 """Game-version detection and per-region address tables.
 
-Addresses are sourced from the CGF95/tww decompilation symbol maps
-(config/<GAMEID>/symbols.txt) and cross-referenced with the community RAM map at
-https://github.com/LagoLunatic/WW-Hacking-Docs .
+Addresses are sourced from the decomp's per-version symbol maps
+(config/<GAMEID>/symbols.txt) and cross-referenced with the WW-Hacking-Docs RAM map
+(https://github.com/LagoLunatic/WW-Hacking-Docs).
 
-Primary target is the Japanese GameCube release (GZLJ01). USA (GZLE01) is a full second
-table, sourced the same way: static globals are cross-referenced by symbol name against
-config/GZLE01/symbols.txt. The two fields that aren't separate symbols — player_ptr and
-camera_ptr, each computed as game_info + a struct offset — needed one extra step (see the
-comment above ``_USA``) since the decomp documents a JP/USA game_info layout difference
-that shifts those particular offsets. Fields we haven't yet verified live are left as
-``None`` and filled in during M1.
+JP (GZLJ01) is primary; USA (GZLE01) is a full second table, same sourcing method.
+player_ptr/camera_ptr aren't separate symbols (they're game_info + a struct offset) —
+see the comment above ``_USA`` for the one JP/USA layout quirk that affects them.
+Unverified fields are left ``None``.
 
-Verification status of the static player globals (as of M0):
-  - ``link_pos`` is the decomp symbol ``l_debug_keep_pos`` (3 floats X/Y/Z, size 0xC).
-  - ``link_angle_y`` is ``l_debug_current_angle`` + 2 (the Y component of a 3x s16 vector).
-These are documented by the community RAM map as mirroring the player entity every frame, but
-because they are *debug* globals they MUST be confirmed against a live game (see game/player.py
-for the more-robust actor-pointer path we add once the offsets are verified).
+``link_pos``/``link_angle_y`` are debug-mirror globals (``l_debug_keep_pos`` /
+``l_debug_current_angle``) — good for reading, but must be live-confirmed before
+trusting (see game/player.py for the sturdier actor-pointer path).
 """
 
 from __future__ import annotations
@@ -117,13 +111,10 @@ _JP = Addresses(
     retrace_count=0x803EAFDC,
     player_accessor=0x800EDED8,
     cam_get_body=0x80178840,
-    # player_ptr confirmed via live accessor decode: g_dComIfG_gameInfo + 0x5B40 -> actor.
-    player_ptr=0x803BDC48,
-    # current.pos inside the actor — confirmed live to drive Link (mirror-follow hammer test).
-    player_pos_off=0x01F8,
-    # camera_class* stored at g_dComIfG_gameInfo + 0x5B0C.
-    # JPN has no mpHyruleTextArchive/field_0x481c/field_0x4820 vs USA/PAL,
-    # shifting mCameraInfo (and everything after it) 0x0C bytes earlier.
+    player_ptr=0x803BDC48,  # game_info + 0x5B40, confirmed live (accessor decode)
+    player_pos_off=0x01F8,  # current.pos inside the actor, confirmed live
+    # game_info + 0x5B04. JPN's game_info is missing 3 fields USA/PAL have before
+    # mCameraInfo, shifting this (and everything after) 0x0C bytes earlier than USA.
     camera_ptr=0x803BDC0C,
     camera=CameraOffsets(
         cam_class_off=0x244,  # dCamera_c is embedded in camera_class at this offset
@@ -150,24 +141,22 @@ _JP = Addresses(
     # Same offset from g_dComIfG_gameInfo for all versions (the 3 removed JPN fields
     # are after this field in the struct).
     stage_name_off=0x5134,
-    # HUD disable: not supported for JP (Ralf's gecko codes only cover USA/PAL).
+    # HUD disable: not supported for JP yet. A moveMapCtrlDisp patch (2 addresses)
+    # was tried and did hide the mini-map, but a broader documented patch set (dMap_c
+    # sub-draws, J2DPane) didn't visibly do anything when tested live, and the decomp's
+    # coverage of this area isn't solid enough yet to know why. Revisit once the
+    # decomp progresses further on d_meter/d_map.
     # Player status / inventory (same offsets from game_info for all versions).
     player_status_off=0x00,  # game_info + 0x00: HP, rupees, sword, shield, wallet
     inventory_off=0x3C,      # game_info + 0x3C: 21 item slot bytes (dSv_player_item_c)
 )
 
 # --- USA GameCube ------------------------------------------------------------
-# Static globals below are cross-referenced by symbol name against the tww decomp's
-# config/GZLE01/symbols.txt (same method used to source the JP table), so they carry
-# the same confidence as JP's — except player_ptr/camera_ptr, which aren't separate
-# symbols (they're computed as game_info + a struct offset) and needed one extra
-# step: the decomp notes JPN's g_dComIfG_gameInfo is missing 3 fields
-# (mpHyruleTextArchive/field_0x481c/field_0x4820, 0xC bytes total) that USA/PAL have,
-# which shifts every field from mCameraInfo onward 0xC bytes later in USA relative to
-# JP. Both player_ptr and camera_ptr fall after that point, so their USA offsets are
-# JP's + 0xC. This is a documented structural fact, not a guess, but — like every
-# other M1 field — should still be sanity-checked live with tools/discover.py before
-# depending on it (see the module docstring).
+# Same sourcing as JP: symbols cross-referenced against config/GZLE01/symbols.txt.
+# Exception: player_ptr/camera_ptr aren't separate symbols (game_info + a struct
+# offset), and JP's game_info is missing 3 fields (0xC bytes) that USA/PAL have
+# before mCameraInfo — shifting both offsets +0xC vs JP. A documented structural
+# fact, not a guess, but still worth a live sanity check (see module docstring).
 _USA = Addresses(
     game_id="GZLE01",
     label="Wind Waker (USA, GameCube)",
@@ -177,16 +166,10 @@ _USA = Addresses(
     retrace_count=0x803F7B3C,  # retraceCount
     player_accessor=0x800F0F1C,  # daPy_getPlayerLinkActorClass__Fv
     cam_get_body=0x8017BDFC,  # dCam_getBody__Fv
-    # game_info + 0x5B4C (JP's 0x5B40 + the 0xC USA/JP struct-layout shift, see above).
-    player_ptr=0x803CA754,
-    # current.pos offset inside the actor — struct-internal to fopAc_ac_c, not
-    # g_dComIfG_gameInfo, so unaffected by the JP/USA game_info shift above; same
-    # value as JP.
-    player_pos_off=0x01F8,
-    # game_info + 0x5B10 (JP's 0x5B04 + the 0xC shift).
-    camera_ptr=0x803CA718,
-    # dCamera_c/camera_class layout is region-invariant (same as player_pos_off).
-    camera=CameraOffsets(
+    player_ptr=0x803CA754,  # game_info + 0x5B4C (JP's 0x5B40 + the 0xC shift)
+    player_pos_off=0x01F8,  # fopAc_ac_c-internal, unaffected by the game_info shift
+    camera_ptr=0x803CA718,  # game_info + 0x5B10 (JP's 0x5B04 + the 0xC shift)
+    camera=CameraOffsets(  # dCamera_c/camera_class layout is region-invariant
         cam_class_off=0x244,
         eye=0x01C,
         center=0x010,

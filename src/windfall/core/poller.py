@@ -39,6 +39,7 @@ class Snapshot:
     game_id: Optional[str] = None
     label: Optional[str] = None
     supported: bool = False
+    hud_disable_supported: bool = False
     link_pos: Optional[tuple[float, float, float]] = None
     link_angle_deg: Optional[float] = None
     # Camera state (None when camera addresses are unavailable or camera isn't loaded).
@@ -341,6 +342,17 @@ class Poller(QObject):
         self._cam_tracker.shutdown()
         self._hook.disconnect()
 
+    def force_reconnect(self) -> None:
+        """Drop the current hook and reset version-dependent state so the next tick
+        re-detects from scratch (manual "Reconnect" button — the normal per-tick
+        checks already catch most cases, this is for when it seems stuck)."""
+        self._hook.disconnect()
+        self._version = None
+        self._player = None
+        self._camera = None
+        self._actor_list = None
+        self._cached_actors = []
+
     # ---- write plumbing (called from the UI thread) -------------------------
     def queue_write(self, fn: WriteFn) -> None:
         """Run ``fn`` once on the next tick (e.g. 'apply' from an editable field)."""
@@ -390,12 +402,9 @@ class Poller(QObject):
         try:
             self._tick_body(snap)
         except Exception:
-            # Whatever broke (e.g. Dolphin/the game closing mid-read, an OS-level
-            # error from the hook library on a now-stale handle), never let it
-            # silently swallow this tick: the timer keeps firing regardless, so a
-            # tick that dies before emitting would leave the UI frozen showing
-            # whatever it last displayed — "Hooked" forever, even with the game
-            # closed. Fall back to reporting disconnected instead.
+            # A tick that dies before emitting leaves the UI frozen on stale data
+            # (e.g. stuck "Hooked" after the game closes) — always report disconnected
+            # instead of silently swallowing the failure.
             snap = Snapshot()
             snap.connected = False
         self.snapshot.emit(snap)
@@ -416,6 +425,7 @@ class Poller(QObject):
             if self._version:
                 snap.label = self._version.label
                 snap.supported = True
+                snap.hud_disable_supported = bool(self._version.addr.hud_disable_writes)
             self._drain_writes()
             self._read_player(snap)
             self._read_camera(snap)
@@ -426,10 +436,8 @@ class Poller(QObject):
     _last_game_id: Optional[str] = None
 
     def _ensure_version(self) -> None:
-        """(Re)detect the running game every tick — not just once — so switching games
-        in Dolphin without a full disconnect (e.g. JP -> USA) is picked up. Rebuilding
-        the version-dependent readers only happens when the detected game_id actually
-        changes; this is otherwise just a cheap 6-byte read once per tick."""
+        """Re-detect every tick (cheap 6-byte read) so switching games in Dolphin
+        without a disconnect is picked up; readers only rebuild when game_id changes."""
         game_id, version = detect_version(self._hook)
         self._last_game_id = game_id
         if version is None:
@@ -539,12 +547,9 @@ class Poller(QObject):
             pass
 
     def _read_collision(self, snap: Snapshot) -> None:
-        """Re-read the collision registry on stage change or periodically.
-
-        Collision meshes are cached per stage name so that rooms which have
-        streamed out (Link moved away) stay visible on the map — but only for
-        the *current* stage; switching stages (e.g. into Beedle's ship and back
-        to the sea) must not keep showing a stage you've since left."""
+        """Re-read collision on stage change or periodically. Cached per stage name so
+        streamed-out rooms stay visible, but only the *current* stage is shown — leaving
+        for another stage and back must not keep showing the one you left."""
         if self._collision is None:
             return
         stage_changed = snap.stage_name != self._collision_stage

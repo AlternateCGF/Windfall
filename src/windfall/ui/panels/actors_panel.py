@@ -222,10 +222,9 @@ class ActorsPanel(QWidget):
             self.select_actor(pending)
         self._count_lbl.setText(f"{len(actors)}/{len(snap.actors)}")
 
-        # If Dolphin/the game closes, every actor address is now invalid — release
-        # every lock. This can't be folded into the "despawned" check below: while
-        # disconnected, snap.actors is always [], so that check never sees a game
-        # to compare against and would otherwise leave locks stuck on forever.
+        # Disconnected: every actor address is now invalid, so release all locks.
+        # Can't reuse the "despawned" check below — snap.actors is always [] while
+        # disconnected, so it'd never see a game to compare against.
         if not snap.connected:
             if self.is_locked:
                 self.release_all_locks()

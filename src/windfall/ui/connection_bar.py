@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from ..core.poller import Snapshot
 
 
 class ConnectionBar(QWidget):
+    reconnect_requested = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self._status = QLabel("Searching for Dolphin…")
@@ -16,9 +19,16 @@ class ConnectionBar(QWidget):
         self._game = QLabel("")
         self._game.setStyleSheet("color:#9aa;")
 
+        self._reconnect_btn = QPushButton("Reconnect")
+        self._reconnect_btn.setToolTip(
+            "Drop and re-hook Dolphin — use this if the connection seems stuck."
+        )
+        self._reconnect_btn.clicked.connect(self.reconnect_requested)
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.addWidget(self._status)
+        layout.addWidget(self._reconnect_btn)
         layout.addStretch(1)
         layout.addWidget(self._stage)
         layout.addWidget(self._game)

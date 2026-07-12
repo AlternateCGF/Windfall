@@ -63,15 +63,11 @@ a = Analysis(
     noarchive=False,
 )
 
-# Plugin/support DLLs the excludes above don't catch on their own — PySide6's
-# PyInstaller hook bundles most installed Qt6*.dll binaries regardless of which
-# PySide6.QtX python submodules are excluded/imported, so the actual compiled Qt
-# libraries for unused modules have to be stripped by filename too: QtQml/Quick
-# (no QML), QtPdf/QtNetwork/QtSvg/QtVirtualKeyboard (unused), the software OpenGL
-# rasterizer (we never use QOpenGLWidget), the alternate Direct2D platform plugin
-# (qwindows.dll is what's actually used), TLS backends (no networking), and every
-# image-format plugin except the one we actually need (.ico, for the window icon)
-# — our assets are otherwise plain .png, which QtGui reads natively.
+# The excludes above don't stop PySide6's hook from bundling most Qt6*.dll binaries
+# regardless of which submodules are imported, so unused ones are stripped by filename
+# too: QtQml/Quick/Pdf/Network/Svg/VirtualKeyboard, the software OpenGL rasterizer,
+# the alternate Direct2D platform plugin, TLS backends, and every image-format plugin
+# except .ico (our assets are otherwise plain .png, read natively by QtGui).
 _STRIP_SUBSTRINGS = [
     "opengl32sw",
     "qdirect2d",

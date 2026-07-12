@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
 
         # Start the poller first so panels can wire holds into it.
         self._start_poller(hz)
+        self._bar.reconnect_requested.connect(self._poller.force_reconnect)
 
         self._map_panel = MapPanel(self._poller)
         self._link_panel = LinkPanel(self._poller)

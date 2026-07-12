@@ -53,9 +53,8 @@ class DolphinHook:
             dme.un_hook()
 
     def is_connected(self) -> bool:
-        # is_hooked() is just a cached flag from the last hook() call — it doesn't notice
-        # Dolphin or the emulated game closing later, so the UI would keep showing
-        # "Hooked" forever. get_status() actively re-probes the process each call.
+        # is_hooked() is a cached flag that never notices the game closing later;
+        # get_status() actively re-probes.
         return dme.get_status().name == "hooked"
 
     @staticmethod

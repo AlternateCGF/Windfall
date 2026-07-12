@@ -29,9 +29,6 @@ from ...core.poller import Poller, Snapshot
 from ...game.actors import is_ambient
 from ...memory.hook import DolphinHook
 
-# HUD disable is only supported for USA (GZLE01).
-_HUD_SUPPORTED_GAME_IDS = {"GZLE01"}
-
 # fopAc_ac_c render-suppression flags (zeldaret/tww f_op_actor.h).
 # Setting these makes the game skip the actor's draw call while it stays loaded
 # and its logic keeps running — the engine's own "don't render" mechanism.
@@ -560,9 +557,8 @@ class MoviePanel(QWidget):
             self._hidden_actors.clear()
             self._poller.clear_fast_hold("actor_visibility")
 
-        supported = snap.game_id in _HUD_SUPPORTED_GAME_IDS if snap.game_id else False
-        self._disable_hud.setEnabled(supported)
-        if not supported and self._disable_hud.isChecked():
+        self._disable_hud.setEnabled(snap.hud_disable_supported)
+        if not snap.hud_disable_supported and self._disable_hud.isChecked():
             self._disable_hud.setChecked(False)
 
         self._tl_tick()

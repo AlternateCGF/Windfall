@@ -16,12 +16,10 @@ from ...core.poller import Poller, Snapshot
 
 _POS_MIN, _POS_MAX = -999999.0, 999999.0
 
-# The poller runs on its own thread and delivers snapshots via a queued signal,
-# so one or more snapshots read *before* Apply's teleport lands in game memory
-# can still be sitting in the event queue when Apply clears the dirty flag —
-# the next one processed would snap the fields back to the pre-teleport
-# position. Suppress live overwrites for a bit longer than
-# Poller.teleport_link_once's forced-write duration (0.4s) to close that race.
+# Snapshots read just before Apply's teleport lands can still be queued when Apply
+# clears the dirty flag, snapping fields back to the pre-teleport position. Suppress
+# live overwrites a bit longer than teleport_link_once's forced-write duration (0.4s)
+# to close that race.
 _APPLY_SUPPRESS_S = 0.5
 
 
